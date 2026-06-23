@@ -1,0 +1,83 @@
+@{
+    ViewData["Title"] = "Consulta de Países";
+    Layout = "~/Views/Shared/_Layout.cshtml";
+}
+
+<h1>📋 Consulta de Países</h1>
+
+<div class="button-container">
+    <button id="consultarBtn" onclick="consultarPaises()">Consultar Países</button>
+</div>
+
+<div id="loading" class="loading" style="display: none;">
+    <div class="spinner"></div>
+    <p>Autenticando y cargando datos...</p>
+</div>
+
+<div id="error" class="error"></div>
+
+<div id="tableContainer"></div>
+
+@section Scripts {
+    <script>
+        async function consultarPaises() {
+            const btn = document.getElementById('consultarBtn');
+            const loading = document.getElementById('loading');
+            const errorDiv = document.getElementById('error');
+            const tableContainer = document.getElementById('tableContainer');
+
+            // Limpiar errores
+            errorDiv.classList.remove('show');
+            errorDiv.textContent = '';
+
+            // Mostrar loading y deshabilitar botón
+            loading.style.display = 'block';
+            btn.disabled = true;
+            tableContainer.innerHTML = '';
+
+            try {
+                // Hacer la solicitud al endpoint backend
+                const response = await fetch('/api/countries');
+                
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || `Error ${response.status}`);
+                }
+
+                const countries = await response.json();
+
+                // Ocultar loading
+                loading.style.display = 'none';
+
+                if (!countries || countries.length === 0) {
+                    tableContainer.innerHTML = '<div class="no-data">No se encontraron países</div>';
+                } else {
+                    // Renderizar tabla
+                    const html = generarTabla(countries);
+                    tableContainer.innerHTML = html;
+                }
+            } catch (error) {
+                loading.style.display = 'none';
+                errorDiv.textContent = '❌ Error: ' + error.message;
+                errorDiv.classList.add('show');
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        function generarTabla(countries) {
+            let html = '<table><thead><tr><th>ID</th><th>Nombre</th><th>Código</th></tr></thead><tbody>';
+            
+            countries.forEach(country => {
+                html += `<tr>
+                    <td>${country.id}</td>
+                    <td>${country.name}</td>
+                    <td>${country.code}</td>
+                </tr>`;
+            });
+
+            html += '</tbody></table>';
+            return html;
+        }
+    </script>
+}

@@ -1,0 +1,13 @@
+@ClientDemo_HostAddress = http://localhost:5230
+
+### Get Countries with Authentication
+### This endpoint will:
+### 1. Authenticate with the security API
+### 2. Get the access token
+### 3. Use the token to fetch countries from the Countries API
+### 4. Return the countries in an HTML table format
+
+GET {{ClientDemo_HostAddress}}/api/countries
+Accept: application/json
+
+###

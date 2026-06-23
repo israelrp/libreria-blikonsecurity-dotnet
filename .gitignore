@@ -43,6 +43,24 @@ ScaffoldingReadMe.txt
 ~$*
 *~
 CodeCoverage/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local editor and agent state
+.vs/
+.vscode/
+.idea/
+.agents/
+.codex/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Local verification outputs
+tmp-build-check/
+.tmp-build-check/
 
 # MSBuild Binary and Structured Log
 *.binlog
