@@ -60,7 +60,9 @@ public sealed class SecurityErrorReportingMiddleware
         {
             ExceptionType = exception.GetType().Name,
             ErrorMessage = exception.Message,
-            Criticality = "critical",
+            Criticality = SecurityErrorCriticality.FromException(
+                exception,
+                StatusCodes.Status500InternalServerError),
             Traceback = exception.ToString(),
             FileName = NormalizeText(Path.GetFileName(stackFrame?.GetFileName()), 100),
             FunctionName = NormalizeText(stackFrame?.GetMethod()?.Name, 100),

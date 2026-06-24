@@ -81,5 +81,7 @@ internal sealed class SecurityErrorReporter : ISecurityErrorReporter
 
         if (string.IsNullOrWhiteSpace(report.Criticality))
             throw new ArgumentException("Criticality es requerido.", nameof(report));
+
+        report.Criticality = SecurityErrorCriticality.Normalize(report.Criticality);
     }
 }
