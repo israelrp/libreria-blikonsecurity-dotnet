@@ -64,7 +64,15 @@ app.MapControllers();
 public IActionResult GetCountries() => Ok();
 ```
 
-La libreria valida firma RSA, issuer, audience, lifetime y permisos en el claim `scp` bajo el `SystemId` configurado.
+Para permitir el acceso con cualquiera de varios permisos, separalos por coma:
+
+```csharp
+[CustomAuthorize("catalogopaises.read,catalogopaises.update")]
+[HttpGet("countries")]
+public IActionResult GetCountries() => Ok();
+```
+
+La libreria valida firma RSA, issuer, audience, lifetime y permisos en el claim `scp` bajo el `SystemId` configurado. Cuando se configuran varios permisos en un mismo atributo, autoriza si el token contiene al menos uno de ellos.
 
 ## Reporte manual de errores
 

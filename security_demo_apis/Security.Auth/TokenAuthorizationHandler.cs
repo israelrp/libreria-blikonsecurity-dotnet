@@ -118,15 +118,19 @@ public class TokenAuthorizationHandler : AuthorizationHandler<CustomAuthorizeAtt
                 }
             }
 
+            var permisosRequeridos = (requirement.Permission ?? string.Empty)
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
             if (string.IsNullOrEmpty(requirement.Permission) ||
-                permisosDelSistema.Contains(requirement.Permission, StringComparer.OrdinalIgnoreCase))
+                permisosRequeridos.Any(permisoRequerido =>
+                    permisosDelSistema.Contains(permisoRequerido, StringComparer.OrdinalIgnoreCase)))
             {
                 context.Succeed(requirement);
                 return;
             }
 
-            var forbiddenMessage = $"No tiene el permiso requerido: {requirement.Permission}.";
-            _logger.LogWarning("Permiso denegado. Requerido: {Permission}", requirement.Permission);
+            var forbiddenMessage = $"No tiene ninguno de los permisos requeridos: {requirement.Permission}.";
+            _logger.LogWarning("Permiso denegado. Requeridos: {Permission}", requirement.Permission);
             await WriteErrorResponseAsync(httpContext, StatusCodes.Status403Forbidden, "forbidden", forbiddenMessage);
             context.Fail(new AuthorizationFailureReason(this, forbiddenMessage));
         }
