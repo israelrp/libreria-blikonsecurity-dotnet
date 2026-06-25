@@ -27,6 +27,19 @@ Libreria interna para APIs .NET con:
 
 `Security:Auth:SystemId` se usa tanto para validar permisos del JWT entrante como para autenticar el sistema al registrar errores. `Security:Errors:Secret` es el secreto saliente del sistema.
 
+## Dependencias requeridas
+
+Al importar esta libreria en otro proyecto, confirma que el proyecto consumidor pueda resolver estas dependencias si no instalar desde nugget managger:
+
+  <FrameworkReference Include="Microsoft.AspNetCore.App" />
+
+  <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.19.0" />
+
+
+`Microsoft.AspNetCore.App` es necesario por los tipos de autenticacion/autorizacion y middleware de ASP.NET Core que usa la libreria (`Microsoft.AspNetCore.Authentication`, `Microsoft.AspNetCore.Authorization`, `Microsoft.AspNetCore.Http`, `Microsoft.Extensions.*`). `Microsoft.IdentityModel.JsonWebTokens` aporta `JsonWebTokenHandler` y se apoya en `Microsoft.IdentityModel.Tokens` para validar firma, issuer, audience y lifetime del JWT.
+
+Si el proyecto destino ya es una Web API con `Microsoft.NET.Sdk.Web`, normalmente el framework de ASP.NET Core ya esta disponible. Si es una libreria o proyecto con `Microsoft.NET.Sdk`, agrega el `FrameworkReference` para evitar errores de compilacion al resolver esos namespaces.
+
 ## Registro
 
 ```csharp
