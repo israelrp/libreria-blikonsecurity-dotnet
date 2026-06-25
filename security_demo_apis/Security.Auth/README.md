@@ -76,6 +76,40 @@ La libreria valida firma RSA, issuer, audience, lifetime y permisos en el claim 
 
 ## Reporte manual de errores
 
+Para reportar una excepcion capturada y conservar una respuesta personalizada al cliente, usa el overload simplificado:
+
+```csharp
+catch (Exception ex)
+{
+    await _errorReporter.ReportAsync(ex, HttpContext);
+    return StatusCode(500, new { message = "No fue posible procesar la solicitud." });
+}
+```
+
+La libreria detecta automaticamente `ExceptionType`, `ErrorMessage`, `Traceback`, archivo, funcion, linea, endpoint, metodo, `requestId` y criticidad. La criticidad usa la misma clasificacion del middleware automatico.
+
+Puedes sobrescribir valores opcionales cuando el caso lo requiera:
+
+```csharp
+catch (Exception ex)
+{
+    await _errorReporter.ReportAsync(
+        ex,
+        HttpContext,
+        statusCode: StatusCodes.Status400BadRequest,
+        criticality: "low",
+        additionalInfo: new Dictionary<string, object?>
+        {
+            ["actorType"] = "user",
+            ["userId"] = userId
+        });
+
+    return BadRequest(new { message = "La solicitud no es valida." });
+}
+```
+
+Si necesitas control total del payload, tambien puedes enviar el modelo completo:
+
 ```csharp
 public sealed class MyService
 {

@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
@@ -28,7 +27,7 @@ public sealed class SecurityErrorReportingMiddleware
         }
         catch (Exception ex)
         {
-            await ReportExceptionAsync(httpContext, errorReporter, ex);
+            await errorReporter.ReportAsync(ex, httpContext);
 
             if (httpContext.Response.HasStarted)
             {
@@ -46,62 +45,5 @@ public sealed class SecurityErrorReportingMiddleware
                 message = "Error interno del servidor."
             }, JsonOptions));
         }
-    }
-
-    private static async Task ReportExceptionAsync(
-        HttpContext httpContext,
-        ISecurityErrorReporter errorReporter,
-        Exception exception)
-    {
-        var stackFrame = GetFirstStackFrame(exception);
-        var request = httpContext.Request;
-
-        var report = new SecurityErrorReport
-        {
-            ExceptionType = exception.GetType().Name,
-            ErrorMessage = exception.Message,
-            Criticality = SecurityErrorCriticality.FromException(
-                exception,
-                StatusCodes.Status500InternalServerError),
-            Traceback = exception.ToString(),
-            FileName = NormalizeText(Path.GetFileName(stackFrame?.GetFileName()), 100),
-            FunctionName = NormalizeText(stackFrame?.GetMethod()?.Name, 100),
-            LineNumber = GetLineNumber(stackFrame),
-            Endpoint = request.Path.Value ?? string.Empty,
-            Method = request.Method,
-            StatusCode = StatusCodes.Status500InternalServerError,
-            AdditionalInfo = new Dictionary<string, object?>
-            {
-                ["actorType"] = "system",
-                ["requestId"] = httpContext.TraceIdentifier,
-                ["traceIdentifier"] = httpContext.TraceIdentifier,
-                ["path"] = request.Path.Value,
-                ["queryString"] = request.QueryString.Value,
-                ["host"] = request.Host.Value
-            }
-        };
-
-        await errorReporter.ReportAsync(report, httpContext.RequestAborted);
-    }
-
-    private static StackFrame? GetFirstStackFrame(Exception exception)
-    {
-        return new StackTrace(exception, true)
-            .GetFrames()?
-            .FirstOrDefault(frame => frame.GetMethod() is not null);
-    }
-
-    private static int? GetLineNumber(StackFrame? stackFrame)
-    {
-        var lineNumber = stackFrame?.GetFileLineNumber() ?? 0;
-        return lineNumber > 0 ? lineNumber : null;
-    }
-
-    private static string NormalizeText(string? value, int maxLength)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return string.Empty;
-
-        return value.Length <= maxLength ? value : value[..maxLength];
     }
 }

@@ -1,9 +1,11 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 
 namespace Security.Auth;
@@ -60,6 +62,23 @@ internal sealed class SecurityErrorReporter : ISecurityErrorReporter
         }
     }
 
+    public Task ReportAsync(
+        Exception exception,
+        HttpContext? httpContext = null,
+        string? criticality = null,
+        int? statusCode = null,
+        IDictionary<string, object?>? additionalInfo = null,
+        CancellationToken cancellationToken = default)
+    {
+        var resolvedStatusCode = statusCode ?? StatusCodes.Status500InternalServerError;
+        var report = BuildReport(exception, httpContext, criticality, resolvedStatusCode, additionalInfo);
+
+        if (cancellationToken == default && httpContext is not null)
+            cancellationToken = httpContext.RequestAborted;
+
+        return ReportAsync(report, cancellationToken);
+    }
+
     private async Task<HttpResponseMessage> SendAsync(SecurityErrorReport report, CancellationToken cancellationToken)
     {
         var token = await _tokenProvider.GetAccessTokenAsync(cancellationToken);
@@ -83,5 +102,81 @@ internal sealed class SecurityErrorReporter : ISecurityErrorReporter
             throw new ArgumentException("Criticality es requerido.", nameof(report));
 
         report.Criticality = SecurityErrorCriticality.Normalize(report.Criticality);
+    }
+
+    private static SecurityErrorReport BuildReport(
+        Exception exception,
+        HttpContext? httpContext,
+        string? criticality,
+        int statusCode,
+        IDictionary<string, object?>? additionalInfo)
+    {
+        var stackFrame = GetFirstStackFrame(exception);
+        var request = httpContext?.Request;
+        var reportAdditionalInfo = BuildAdditionalInfo(httpContext);
+
+        if (additionalInfo is not null)
+        {
+            foreach (var item in additionalInfo)
+            {
+                reportAdditionalInfo[item.Key] = item.Value;
+            }
+        }
+
+        return new SecurityErrorReport
+        {
+            ExceptionType = exception.GetType().Name,
+            ErrorMessage = exception.Message,
+            Criticality = criticality ?? SecurityErrorCriticality.FromException(exception, statusCode),
+            Traceback = exception.ToString(),
+            FileName = NormalizeText(Path.GetFileName(stackFrame?.GetFileName()), 100),
+            FunctionName = NormalizeText(stackFrame?.GetMethod()?.Name, 100),
+            LineNumber = GetLineNumber(stackFrame),
+            Endpoint = request?.Path.Value ?? string.Empty,
+            Method = request?.Method ?? string.Empty,
+            StatusCode = statusCode,
+            AdditionalInfo = reportAdditionalInfo
+        };
+    }
+
+    private static Dictionary<string, object?> BuildAdditionalInfo(HttpContext? httpContext)
+    {
+        var additionalInfo = new Dictionary<string, object?>
+        {
+            ["actorType"] = "system"
+        };
+
+        if (httpContext is null)
+            return additionalInfo;
+
+        var request = httpContext.Request;
+        additionalInfo["requestId"] = httpContext.TraceIdentifier;
+        additionalInfo["traceIdentifier"] = httpContext.TraceIdentifier;
+        additionalInfo["path"] = request.Path.Value;
+        additionalInfo["queryString"] = request.QueryString.Value;
+        additionalInfo["host"] = request.Host.Value;
+
+        return additionalInfo;
+    }
+
+    private static StackFrame? GetFirstStackFrame(Exception exception)
+    {
+        return new StackTrace(exception, true)
+            .GetFrames()?
+            .FirstOrDefault(frame => frame.GetMethod() is not null);
+    }
+
+    private static int? GetLineNumber(StackFrame? stackFrame)
+    {
+        var lineNumber = stackFrame?.GetFileLineNumber() ?? 0;
+        return lineNumber > 0 ? lineNumber : null;
+    }
+
+    private static string NormalizeText(string? value, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        return value.Length <= maxLength ? value : value[..maxLength];
     }
 }
