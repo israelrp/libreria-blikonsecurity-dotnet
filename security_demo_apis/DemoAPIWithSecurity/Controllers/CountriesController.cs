@@ -5,7 +5,7 @@ using Security.Auth;
 namespace DemoAPIWithSecurity.Controllers;
 
 /// <summary>
-/// Controlador para gestionar información de países
+/// Controlador para gestionar información de países.
 /// </summary>
 [ApiController]
 [Route("api/[controller]")]
@@ -27,21 +27,38 @@ public class CountriesController : ControllerBase
     };
 
     /// <summary>
-    /// Obtiene la lista completa de países
+    /// Obtiene la lista completa de países con permiso de sistema.
     /// </summary>
-    /// <remarks>
-    /// Ejemplo de solicitud:
-    /// 
-    ///     GET /api/countries
-    /// </remarks>
-    /// <returns>Lista de todos los países disponibles</returns>
-    /// <response code="200">Retorna la lista de países</response>
     [HttpGet]
     [ProducesResponseType(StatusCodes.Status200OK)]
-    [CustomAuthorize("catalogopaises.read")] // Requiere el permiso "countries:read" para acceder a esta acción
+    [SystemAuthorize("catalogopaises.read")]
     public ActionResult<IEnumerable<Country>> GetCountries()
     {
         return Ok(Countries);
+    }
+
+    /// <summary>
+    /// Obtiene países para un place usando un token de usuario.
+    /// </summary>
+    [HttpGet("place/{spaceId}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [PlaceAuthorize("catalogopaises.read")]
+    public ActionResult<IEnumerable<Country>> GetCountriesByPlace(int spaceId)
+    {
+        return Ok(new { spaceId, countries = Countries });
+    }
+
+    /// <summary>
+    /// Obtiene países aceptando permiso de sistema o permiso por place.
+    /// </summary>
+    [HttpGet("hybrid/{spaceId}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [SystemOrPlaceAuthorize(
+        SystemPermission = "catalogopaises.read",
+        PlacePermission = "catalogopaises.read")]
+    public ActionResult<IEnumerable<Country>> GetCountriesHybrid(int spaceId)
+    {
+        return Ok(new { spaceId, countries = Countries });
     }
 
     [HttpGet("demo-error")]
@@ -52,17 +69,8 @@ public class CountriesController : ControllerBase
     }
 
     /// <summary>
-    /// Obtiene un país específico por su ID
+    /// Obtiene un país específico por su ID.
     /// </summary>
-    /// <remarks>
-    /// Ejemplo de solicitud:
-    /// 
-    ///     GET /api/countries/1
-    /// </remarks>
-    /// <param name="id">ID del país a consultar</param>
-    /// <returns>País encontrado</returns>
-    /// <response code="200">Retorna el país solicitado</response>
-    /// <response code="404">Si el país no existe</response>
     [HttpGet("{id}")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -73,6 +81,7 @@ public class CountriesController : ControllerBase
         {
             return NotFound();
         }
+
         return Ok(country);
     }
 }

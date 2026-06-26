@@ -2,7 +2,8 @@
 
 Libreria interna para APIs .NET con:
 
-- Validacion/autorizacion Bearer JWT por permisos.
+- Validacion Bearer JWT con firma RSA, issuer, audience y lifetime.
+- Autorizacion por permisos de sistema y permisos por place.
 - Reporte de errores hacia Security API.
 - Middleware opcional para capturar excepciones no manejadas.
 
@@ -15,7 +16,8 @@ Libreria interna para APIs .NET con:
       "PublicKeyPath": "Auth/public_key.pem",
       "SystemId": "fa5492fe-7f66-4ceb-b2a6-adeafc0ff93d",
       "ValidIssuer": "https://auth.blikon.com",
-      "ValidAudience": "fa5492fe-7f66-4ceb-b2a6-adeafc0ff93d"
+      "ValidAudience": "fa5492fe-7f66-4ceb-b2a6-adeafc0ff93d",
+      "EnableSuperAdminBypass": true
     },
     "Errors": {
       "BaseUrl": "https://security-api.dev.com.pro/api/v1",
@@ -25,20 +27,24 @@ Libreria interna para APIs .NET con:
 }
 ```
 
-`Security:Auth:SystemId` se usa tanto para validar permisos del JWT entrante como para autenticar el sistema al registrar errores. `Security:Errors:Secret` es el secreto saliente del sistema.
+`Security:Auth:SystemId` identifica el sistema/API que recibe el token. La libreria busca permisos dentro de `scp[SystemId]`.
+
+`Security:Auth:ValidAudience` debe coincidir con el audience esperado del JWT entrante.
+
+`Security:Auth:EnableSuperAdminBypass` permite que un token valido con `is_superadmin: true` pase la autorizacion sin exigir el permiso exacto. La validacion de firma, issuer, audience y expiracion nunca se omite.
+
+`Security:Errors:Secret` es el secreto saliente que usa este sistema para autenticarse al registrar errores.
 
 ## Dependencias requeridas
 
-Al importar esta libreria en otro proyecto, confirma que el proyecto consumidor pueda resolver estas dependencias si no instalar desde nugget managger:
+Al importar esta libreria en otro proyecto, confirma que el proyecto consumidor pueda resolver estas dependencias:
 
-  <FrameworkReference Include="Microsoft.AspNetCore.App" />
+```xml
+<FrameworkReference Include="Microsoft.AspNetCore.App" />
+<PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.19.0" />
+```
 
-  <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.19.0" />
-
-
-`Microsoft.AspNetCore.App` es necesario por los tipos de autenticacion/autorizacion y middleware de ASP.NET Core que usa la libreria (`Microsoft.AspNetCore.Authentication`, `Microsoft.AspNetCore.Authorization`, `Microsoft.AspNetCore.Http`, `Microsoft.Extensions.*`). `Microsoft.IdentityModel.JsonWebTokens` aporta `JsonWebTokenHandler` y se apoya en `Microsoft.IdentityModel.Tokens` para validar firma, issuer, audience y lifetime del JWT.
-
-Si el proyecto destino ya es una Web API con `Microsoft.NET.Sdk.Web`, normalmente el framework de ASP.NET Core ya esta disponible. Si es una libreria o proyecto con `Microsoft.NET.Sdk`, agrega el `FrameworkReference` para evitar errores de compilacion al resolver esos namespaces.
+Si el proyecto destino ya es una Web API con `Microsoft.NET.Sdk.Web`, normalmente el framework de ASP.NET Core ya esta disponible. Si es una libreria o proyecto con `Microsoft.NET.Sdk`, agrega el `FrameworkReference` para evitar errores de compilacion.
 
 ## Registro
 
@@ -58,21 +64,98 @@ app.MapControllers();
 
 ## Autorizacion
 
-```csharp
-[CustomAuthorize("catalogopaises.read")]
-[HttpGet("countries")]
-public IActionResult GetCountries() => Ok();
-```
+### Permisos de sistema
 
-Para permitir el acceso con cualquiera de varios permisos, separalos por coma:
+Usa `SystemAuthorize` para tokens system-to-system. La libreria valida el permiso exacto dentro de `scp[SystemId].system[]`.
 
 ```csharp
-[CustomAuthorize("catalogopaises.read,catalogopaises.update")]
-[HttpGet("countries")]
-public IActionResult GetCountries() => Ok();
+[SystemAuthorize("clientauth.send")]
+[HttpPost("send-code")]
+public IActionResult SendCode() => Ok();
 ```
 
-La libreria valida firma RSA, issuer, audience, lifetime y permisos en el claim `scp` bajo el `SystemId` configurado. Cuando se configuran varios permisos en un mismo atributo, autoriza si el token contiene al menos uno de ellos.
+Token esperado:
+
+```json
+{
+  "typ": "system",
+  "aud": ["fa5492fe-7f66-4ceb-b2a6-adeafc0ff93d"],
+  "scp": {
+    "fa5492fe-7f66-4ceb-b2a6-adeafc0ff93d": {
+      "system": ["clientauth.send"]
+    }
+  }
+}
+```
+
+### Permisos por place
+
+Usa `PlaceAuthorize` para tokens de usuario con permisos por place. La libreria valida el permiso exacto dentro de `scp[SystemId].place.{spaceId}[]`.
+
+```csharp
+[PlaceAuthorize("collections.read")]
+[HttpGet("collections/{spaceId}")]
+public IActionResult GetCollections(int spaceId) => Ok();
+```
+
+Token esperado:
+
+```json
+{
+  "typ": "user",
+  "aud": ["fa5492fe-7f66-4ceb-b2a6-adeafc0ff93d"],
+  "scp": {
+    "fa5492fe-7f66-4ceb-b2a6-adeafc0ff93d": {
+      "place.269": ["collections.read"]
+    }
+  }
+}
+```
+
+`PlaceAuthorize` busca el `spaceId` en este orden:
+
+- route values: `/api/collections/{spaceId}`
+- query string: `?spaceId=269`
+- body JSON: `{ "spaceId": 269 }`
+
+Si el parametro se llama distinto, configuralo en el atributo:
+
+```csharp
+[PlaceAuthorize("collections.read", SpaceIdParameterName = "placeId")]
+[HttpGet("places/{placeId}/collections")]
+public IActionResult GetCollections(int placeId) => Ok();
+```
+
+### Aceptar sistema o place
+
+Usa `SystemOrPlaceAuthorize` cuando el endpoint deba aceptar un sistema con permiso de sistema o un usuario con permiso por place.
+
+```csharp
+[SystemOrPlaceAuthorize(
+    SystemPermission = "clientauth.send",
+    PlacePermission = "collections.read")]
+[HttpGet("collections/{spaceId}")]
+public IActionResult GetCollections(int spaceId) => Ok();
+```
+
+Este atributo autoriza con semantica OR:
+
+- pasa si existe `clientauth.send` en `scp[SystemId].system[]`;
+- o pasa si existe `collections.read` en `scp[SystemId].place.{spaceId}[]`.
+
+Si apilas `[SystemAuthorize]` y `[PlaceAuthorize]` en un mismo endpoint, ASP.NET Authorization los tratara como AND: el token debe cumplir ambos requisitos.
+
+### Compatibilidad temporal
+
+`CustomAuthorize("permiso")` sigue disponible y se interpreta como autorizacion de sistema contra `scp[SystemId].system[]`. Para codigo nuevo usa `SystemAuthorize`, `PlaceAuthorize` o `SystemOrPlaceAuthorize`.
+
+### Reglas importantes
+
+- Los permisos son exactos y case-insensitive.
+- No hay wildcard por ahora.
+- No se compara por sufijo: `users.read` no cubre `collections.read`.
+- Token invalido, expirado, con firma invalida, issuer invalido o audience invalido => `401`.
+- Token valido sin permiso suficiente => `403`.
 
 ## Reporte manual de errores
 

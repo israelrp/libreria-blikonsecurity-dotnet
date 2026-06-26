@@ -17,3 +17,29 @@ public class CustomAuthorizeAttribute : AuthorizeAttribute, IAuthorizationRequir
         yield return this;
     }
 }
+
+[AttributeUsage(AttributeTargets.Class | AttributeTargets.Method, AllowMultiple = true)]
+public sealed class SystemAuthorizeAttribute : CustomAuthorizeAttribute
+{
+    public SystemAuthorizeAttribute(string permission) : base(permission)
+    {
+    }
+}
+
+[AttributeUsage(AttributeTargets.Class | AttributeTargets.Method, AllowMultiple = true)]
+public sealed class PlaceAuthorizeAttribute : CustomAuthorizeAttribute
+{
+    public PlaceAuthorizeAttribute(string permission) : base(permission)
+    {
+    }
+
+    public string SpaceIdParameterName { get; set; } = "spaceId";
+}
+
+[AttributeUsage(AttributeTargets.Class | AttributeTargets.Method, AllowMultiple = true)]
+public sealed class SystemOrPlaceAuthorizeAttribute : CustomAuthorizeAttribute
+{
+    public string? SystemPermission { get; set; }
+    public string? PlacePermission { get; set; }
+    public string SpaceIdParameterName { get; set; } = "spaceId";
+}

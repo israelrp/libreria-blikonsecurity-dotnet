@@ -8,4 +8,5 @@ public sealed class SecurityAuthOptions
     public string SystemId { get; set; } = string.Empty;
     public string ValidIssuer { get; set; } = string.Empty;
     public string ValidAudience { get; set; } = string.Empty;
+    public bool EnableSuperAdminBypass { get; set; } = true;
 }
