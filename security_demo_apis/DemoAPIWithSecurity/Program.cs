@@ -1,7 +1,7 @@
 using Security.Auth;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.OpenApi;
-using Microsoft.OpenApi.Models;
+using Microsoft.OpenApi;
 using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -15,10 +15,9 @@ builder.Services.AddOpenApi(options =>
 {
     options.AddDocumentTransformer((document, context, cancellationToken) =>
     {
-        document.Components ??= new OpenApiComponents();
-        document.Components.SecuritySchemes ??= new Dictionary<string, OpenApiSecurityScheme>();
+        var components = document.Components ??= new OpenApiComponents();
 
-        document.Components.SecuritySchemes["Bearer"] = new OpenApiSecurityScheme
+        components.SecuritySchemes!["Bearer"] = new OpenApiSecurityScheme
         {
             Type = SecuritySchemeType.Http,
             Scheme = "bearer",
@@ -38,15 +37,8 @@ builder.Services.AddOpenApi(options =>
             var securityRequirement = new OpenApiSecurityRequirement
             {
                 {
-                    new OpenApiSecurityScheme
-                    {
-                        Reference = new OpenApiReference
-                        {
-                            Type = ReferenceType.SecurityScheme,
-                            Id = "Bearer"
-                        }
-                    },
-                    Array.Empty<string>()
+                    new OpenApiSecuritySchemeReference("Bearer", null),
+                    new List<string>()
                 }
             };
             operation.Security.Add(securityRequirement);

@@ -37,6 +37,8 @@ Libreria interna para APIs .NET con:
 
 ## Dependencias requeridas
 
+La libreria apunta a `net10.0`; el proyecto consumidor debe compilar con SDK .NET 10 y tener runtime ASP.NET Core 10 disponible en despliegue.
+
 Al importar esta libreria en otro proyecto, confirma que el proyecto consumidor pueda resolver estas dependencias:
 
 ```xml
