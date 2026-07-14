@@ -1,4 +1,6 @@
+using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
@@ -6,9 +8,11 @@ using Microsoft.Extensions.Options;
 
 namespace Security.Auth;
 
-public class TokenAuthorizationHandler : AuthorizationHandler<CustomAuthorizeAttribute>
+public sealed class TokenAuthorizationHandler : AuthorizationHandler<SecureAuthAttribute>
 {
-    private const string DefaultSpaceIdParameterName = "spaceId";
+    private static readonly Regex PlaceholderRegex = new(
+        "\\{(?<name>[^{}]+)\\}",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private readonly IHttpContextAccessor _httpContextAccessor;
     private readonly SecurityAuthOptions _authOptions;
@@ -38,7 +42,7 @@ public class TokenAuthorizationHandler : AuthorizationHandler<CustomAuthorizeAtt
 
     protected override async Task HandleRequirementAsync(
         AuthorizationHandlerContext context,
-        CustomAuthorizeAttribute requirement)
+        SecureAuthAttribute requirement)
     {
         var httpContext = _httpContextAccessor.HttpContext;
         if (httpContext is null)
@@ -47,24 +51,11 @@ public class TokenAuthorizationHandler : AuthorizationHandler<CustomAuthorizeAtt
             return;
         }
 
-        if (!httpContext.Request.Headers.TryGetValue("Authorization", out var authHeaderValues))
+        if (!TryGetBearerToken(httpContext, out var token, out var headerError))
         {
-            _logger.LogWarning("Authorization header no presente.");
-            await WriteErrorResponseAsync(httpContext, StatusCodes.Status401Unauthorized, "unauthorized", "Token no proporcionado.");
-            context.Fail(new AuthorizationFailureReason(this, "Token no proporcionado."));
+            await DenyAsync(context, httpContext, StatusCodes.Status401Unauthorized, "unauthorized", headerError);
             return;
         }
-
-        var authHeader = authHeaderValues.ToString();
-        if (string.IsNullOrEmpty(authHeader) || !authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-        {
-            _logger.LogWarning("Authorization header con esquema invalido: {HeaderValue}", authHeader);
-            await WriteErrorResponseAsync(httpContext, StatusCodes.Status401Unauthorized, "unauthorized", "Esquema de autorizacion invalido.");
-            context.Fail(new AuthorizationFailureReason(this, "Esquema de autorizacion invalido."));
-            return;
-        }
-
-        var token = authHeader["Bearer ".Length..].Trim();
 
         try
         {
@@ -74,20 +65,39 @@ public class TokenAuthorizationHandler : AuthorizationHandler<CustomAuthorizeAtt
                 _authOptions.ValidIssuer,
                 _authOptions.ValidAudience);
 
-            if (jwtResult is null)
-            {
-                _logger.LogWarning("JwtValidator devolvio null.");
-                await WriteErrorResponseAsync(httpContext, StatusCodes.Status401Unauthorized, "unauthorized", "No fue posible validar el token.");
-                context.Fail(new AuthorizationFailureReason(this, "No fue posible validar el token."));
-                return;
-            }
-
             if (!jwtResult.IsValid)
             {
                 var message = jwtResult.ErrorMessage ?? "Token invalido.";
                 _logger.LogWarning("Token invalido: {Message}", message);
-                await WriteErrorResponseAsync(httpContext, StatusCodes.Status401Unauthorized, "unauthorized", message);
-                context.Fail(new AuthorizationFailureReason(this, message));
+                await DenyAsync(context, httpContext, StatusCodes.Status401Unauthorized, "unauthorized", message);
+                return;
+            }
+
+            if (!ContainsAudience(jwtResult.Audiences, _authOptions.SystemId))
+            {
+                const string message = "El token no esta destinado al sistema consumidor.";
+                _logger.LogWarning("SystemId {SystemId} no esta presente en aud.", _authOptions.SystemId);
+                await DenyAsync(context, httpContext, StatusCodes.Status401Unauthorized, "unauthorized", message);
+                return;
+            }
+
+            var scopeOwnerResult = ResolveScopeOwner(requirement.ScopeOwner);
+            if (!scopeOwnerResult.IsValid)
+            {
+                _logger.LogWarning("ScopeOwner rechazado: {Reason}", scopeOwnerResult.Message);
+                await DenyAsync(context, httpContext, StatusCodes.Status403Forbidden, "forbidden", scopeOwnerResult.Message);
+                return;
+            }
+
+            if (requirement.ScopeOwner is not null &&
+                !ContainsAudience(jwtResult.Audiences, scopeOwnerResult.SystemId!))
+            {
+                var message = $"El token no esta destinado al propietario de scope '{requirement.ScopeOwner}'.";
+                _logger.LogWarning(
+                    "ScopeOwner {ScopeOwner} con SystemId {ScopeOwnerId} no esta presente en aud.",
+                    requirement.ScopeOwner,
+                    scopeOwnerResult.SystemId);
+                await DenyAsync(context, httpContext, StatusCodes.Status403Forbidden, "forbidden", message);
                 return;
             }
 
@@ -97,158 +107,277 @@ public class TokenAuthorizationHandler : AuthorizationHandler<CustomAuthorizeAtt
                 return;
             }
 
-            var scopes = ParseScopes(jwtResult);
-            var authorizationResult = await AuthorizeRequirementAsync(httpContext, requirement, scopes);
+            var scopeKeyResult = await ResolveScopeKeyAsync(httpContext, requirement.ScopeKey);
+            if (!scopeKeyResult.IsValid)
+            {
+                _logger.LogWarning("ScopeKey rechazado: {Reason}", scopeKeyResult.Message);
+                await DenyAsync(context, httpContext, StatusCodes.Status403Forbidden, "forbidden", scopeKeyResult.Message);
+                return;
+            }
 
-            if (authorizationResult.IsAuthorized)
+            var requiredPermissions = SplitPermissions(requirement.Permission);
+            if (requiredPermissions.Length == 0)
+            {
+                const string message = "No se configuro ningun permiso requerido.";
+                await DenyAsync(context, httpContext, StatusCodes.Status403Forbidden, "forbidden", message);
+                return;
+            }
+
+            var scopes = ParseScopes(jwtResult);
+            var grantedPermissions = GetPermissions(scopes, scopeOwnerResult.SystemId!, scopeKeyResult.ScopeKey!);
+            if (HasAnyRequiredPermission(grantedPermissions, requiredPermissions))
             {
                 context.Succeed(requirement);
                 return;
             }
 
-            _logger.LogWarning("Permiso denegado. {Reason}", authorizationResult.Message);
-            await WriteErrorResponseAsync(httpContext, StatusCodes.Status403Forbidden, "forbidden", authorizationResult.Message);
-            context.Fail(new AuthorizationFailureReason(this, authorizationResult.Message));
+            var deniedMessage =
+                $"No tiene ninguno de los permisos requeridos en '{scopeKeyResult.ScopeKey}': {requirement.Permission}.";
+            _logger.LogWarning(
+                "Permiso denegado para ScopeOwner {ScopeOwnerId}, ScopeKey {ScopeKey}.",
+                scopeOwnerResult.SystemId,
+                scopeKeyResult.ScopeKey);
+            await DenyAsync(context, httpContext, StatusCodes.Status403Forbidden, "forbidden", deniedMessage);
         }
         catch (JsonException ex)
         {
-            _logger.LogWarning(ex, "El claim scp tiene formato invalido para SystemId {SystemId}", _authOptions.SystemId);
-            await WriteErrorResponseAsync(httpContext, StatusCodes.Status403Forbidden, "forbidden", "El claim scp no tiene un formato valido.");
-            context.Fail(new AuthorizationFailureReason(this, "El claim scp no tiene un formato valido."));
+            _logger.LogWarning(ex, "El claim scp tiene formato invalido.");
+            await DenyAsync(
+                context,
+                httpContext,
+                StatusCodes.Status403Forbidden,
+                "forbidden",
+                "El claim scp no tiene un formato valido.");
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error interno durante la validacion/autorizacion del token.");
-            await WriteErrorResponseAsync(httpContext, StatusCodes.Status401Unauthorized, "unauthorized", "Error interno durante la validacion del token.");
-            context.Fail(new AuthorizationFailureReason(this, "Error interno durante la validacion del token."));
+            await DenyAsync(
+                context,
+                httpContext,
+                StatusCodes.Status401Unauthorized,
+                "unauthorized",
+                "Error interno durante la validacion del token.");
         }
     }
 
-    private async Task<AuthorizationCheckResult> AuthorizeRequirementAsync(
+    private static bool TryGetBearerToken(
         HttpContext httpContext,
-        CustomAuthorizeAttribute requirement,
-        Dictionary<string, Dictionary<string, List<string>>> scopes)
+        out string token,
+        out string errorMessage)
     {
-        return requirement switch
+        token = string.Empty;
+        errorMessage = string.Empty;
+
+        if (!httpContext.Request.Headers.TryGetValue("Authorization", out var authHeaderValues))
         {
-            SystemAuthorizeAttribute systemRequirement => AuthorizeSystem(systemRequirement.Permission, scopes),
-            PlaceAuthorizeAttribute placeRequirement => await AuthorizePlaceAsync(httpContext, placeRequirement.Permission, placeRequirement.SpaceIdParameterName, scopes),
-            SystemOrPlaceAuthorizeAttribute hybridRequirement => await AuthorizeSystemOrPlaceAsync(httpContext, hybridRequirement, scopes),
-            _ => AuthorizeSystem(requirement.Permission, scopes)
-        };
+            errorMessage = "Token no proporcionado.";
+            return false;
+        }
+
+        var authHeader = authHeaderValues.ToString();
+        if (string.IsNullOrWhiteSpace(authHeader) ||
+            !authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+        {
+            errorMessage = "Esquema de autorizacion invalido.";
+            return false;
+        }
+
+        token = authHeader["Bearer ".Length..].Trim();
+        if (token.Length > 0)
+            return true;
+
+        errorMessage = "Token no proporcionado.";
+        return false;
     }
 
-    private async Task<AuthorizationCheckResult> AuthorizeSystemOrPlaceAsync(
+    private ScopeOwnerResolution ResolveScopeOwner(string? scopeOwner)
+    {
+        if (scopeOwner is null)
+            return ScopeOwnerResolution.Valid(_authOptions.SystemId);
+
+        if (string.IsNullOrWhiteSpace(scopeOwner))
+            return ScopeOwnerResolution.Invalid("El alias del propietario de scope esta vacio.");
+
+        var configuredOwner = _authOptions.ScopeOwners.FirstOrDefault(entry =>
+            entry.Key.Equals(scopeOwner, StringComparison.OrdinalIgnoreCase));
+
+        return string.IsNullOrWhiteSpace(configuredOwner.Key)
+            ? ScopeOwnerResolution.Invalid($"El propietario de scope '{scopeOwner}' no esta configurado.")
+            : ScopeOwnerResolution.Valid(configuredOwner.Value);
+    }
+
+    private static bool ContainsAudience(IEnumerable<string> audiences, string requiredAudience)
+    {
+        return audiences.Contains(requiredAudience, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static async Task<ScopeKeyResolution> ResolveScopeKeyAsync(
         HttpContext httpContext,
-        SystemOrPlaceAuthorizeAttribute requirement,
-        Dictionary<string, Dictionary<string, List<string>>> scopes)
+        string scopeKeyTemplate)
     {
-        var systemResult = string.IsNullOrWhiteSpace(requirement.SystemPermission)
-            ? AuthorizationCheckResult.Denied("Permiso de sistema no configurado.")
-            : AuthorizeSystem(requirement.SystemPermission, scopes);
+        if (string.IsNullOrWhiteSpace(scopeKeyTemplate))
+            return ScopeKeyResolution.Invalid("ScopeKey no esta configurado.");
 
-        if (systemResult.IsAuthorized)
-            return systemResult;
+        var matches = PlaceholderRegex.Matches(scopeKeyTemplate);
+        var templateWithoutPlaceholders = PlaceholderRegex.Replace(scopeKeyTemplate, string.Empty);
+        if (templateWithoutPlaceholders.Contains('{') || templateWithoutPlaceholders.Contains('}'))
+            return ScopeKeyResolution.Invalid($"ScopeKey '{scopeKeyTemplate}' contiene una plantilla invalida.");
 
-        var placeResult = string.IsNullOrWhiteSpace(requirement.PlacePermission)
-            ? AuthorizationCheckResult.Denied("Permiso de place no configurado.")
-            : await AuthorizePlaceAsync(httpContext, requirement.PlacePermission, requirement.SpaceIdParameterName, scopes);
+        if (matches.Count == 0)
+            return ScopeKeyResolution.Valid(scopeKeyTemplate);
 
-        if (placeResult.IsAuthorized)
-            return placeResult;
+        Dictionary<string, string>? bodyValues = null;
+        var resolvedScopeKey = new StringBuilder(scopeKeyTemplate);
 
-        return AuthorizationCheckResult.Denied(
-            $"No tiene el permiso de sistema '{requirement.SystemPermission}' ni el permiso de place '{requirement.PlacePermission}'.");
+        foreach (var placeholderName in matches
+                     .Select(match => match.Groups["name"].Value)
+                     .Distinct(StringComparer.Ordinal))
+        {
+            if (string.IsNullOrWhiteSpace(placeholderName))
+                return ScopeKeyResolution.Invalid($"ScopeKey '{scopeKeyTemplate}' contiene un placeholder vacio.");
+
+            var value = TryGetRouteValue(httpContext, placeholderName)
+                ?? TryGetQueryValue(httpContext, placeholderName);
+
+            if (value is null)
+            {
+                bodyValues ??= await ReadRootBodyValuesAsync(httpContext);
+                bodyValues.TryGetValue(placeholderName, out value);
+            }
+
+            if (string.IsNullOrWhiteSpace(value))
+                return ScopeKeyResolution.Invalid($"No fue posible resolver '{placeholderName}' para ScopeKey.");
+
+            resolvedScopeKey.Replace($"{{{placeholderName}}}", value);
+        }
+
+        return ScopeKeyResolution.Valid(resolvedScopeKey.ToString());
     }
 
-    private AuthorizationCheckResult AuthorizeSystem(
-        string? permission,
-        Dictionary<string, Dictionary<string, List<string>>> scopes)
+    private static string? TryGetRouteValue(HttpContext httpContext, string name)
     {
-        if (string.IsNullOrWhiteSpace(permission))
-            return AuthorizationCheckResult.Allowed();
+        var routeValue = httpContext.Request.RouteValues.FirstOrDefault(entry =>
+            entry.Key.Equals(name, StringComparison.OrdinalIgnoreCase));
 
-        var requiredPermissions = SplitPermissions(permission);
-        var permissions = GetPermissions(scopes, "system");
-
-        return HasAnyRequiredPermission(permissions, requiredPermissions)
-            ? AuthorizationCheckResult.Allowed()
-            : AuthorizationCheckResult.Denied($"No tiene ninguno de los permisos de sistema requeridos: {permission}.");
+        return NormalizeRequestValue(routeValue.Value?.ToString());
     }
 
-    private async Task<AuthorizationCheckResult> AuthorizePlaceAsync(
-        HttpContext httpContext,
-        string? permission,
-        string? spaceIdParameterName,
-        Dictionary<string, Dictionary<string, List<string>>> scopes)
+    private static string? TryGetQueryValue(HttpContext httpContext, string name)
     {
-        if (string.IsNullOrWhiteSpace(permission))
-            return AuthorizationCheckResult.Allowed();
+        var queryValue = httpContext.Request.Query.FirstOrDefault(entry =>
+            entry.Key.Equals(name, StringComparison.OrdinalIgnoreCase));
 
-        var resolvedSpaceId = await ResolveSpaceIdAsync(httpContext, spaceIdParameterName);
-        if (string.IsNullOrWhiteSpace(resolvedSpaceId))
-            return AuthorizationCheckResult.Denied($"{spaceIdParameterName ?? DefaultSpaceIdParameterName} requerido o invalido.");
-
-        var placeKey = $"place.{resolvedSpaceId}";
-        var requiredPermissions = SplitPermissions(permission);
-        var permissions = GetPermissions(scopes, placeKey);
-
-        return HasAnyRequiredPermission(permissions, requiredPermissions)
-            ? AuthorizationCheckResult.Allowed()
-            : AuthorizationCheckResult.Denied($"No tiene ninguno de los permisos requeridos para {placeKey}: {permission}.");
+        return NormalizeRequestValue(queryValue.Value.FirstOrDefault());
     }
 
-    private Dictionary<string, Dictionary<string, List<string>>> ParseScopes(JwtValidator.JwtValidationResult jwtResult)
+    private static async Task<Dictionary<string, string>> ReadRootBodyValuesAsync(HttpContext httpContext)
+    {
+        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var request = httpContext.Request;
+
+        if (request.ContentLength == 0 ||
+            string.IsNullOrWhiteSpace(request.ContentType) ||
+            !request.ContentType.Contains("application/json", StringComparison.OrdinalIgnoreCase))
+        {
+            return values;
+        }
+
+        request.EnableBuffering();
+        request.Body.Position = 0;
+
+        try
+        {
+            using var document = await JsonDocument.ParseAsync(request.Body);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return values;
+
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                var value = property.Value.ValueKind switch
+                {
+                    JsonValueKind.String => property.Value.GetString(),
+                    JsonValueKind.Number => property.Value.GetRawText(),
+                    _ => null
+                };
+
+                value = NormalizeRequestValue(value);
+                if (value is not null)
+                    values[property.Name] = value;
+            }
+        }
+        catch (JsonException)
+        {
+            return values;
+        }
+        finally
+        {
+            request.Body.Position = 0;
+        }
+
+        return values;
+    }
+
+    private static string? NormalizeRequestValue(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+
+    private static Dictionary<string, Dictionary<string, List<string>>> ParseScopes(
+        JwtValidator.JwtValidationResult jwtResult)
     {
         var scopes = new Dictionary<string, Dictionary<string, List<string>>>(StringComparer.OrdinalIgnoreCase);
         if (!jwtResult.Claims.TryGetValue("scp", out var scpJson) || string.IsNullOrWhiteSpace(scpJson))
             return scopes;
 
-        using var doc = JsonDocument.Parse(scpJson);
-        if (doc.RootElement.ValueKind != JsonValueKind.Object)
+        using var document = JsonDocument.Parse(scpJson);
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
             return scopes;
 
-        foreach (var audienceProperty in doc.RootElement.EnumerateObject())
+        foreach (var ownerProperty in document.RootElement.EnumerateObject())
         {
-            if (audienceProperty.Value.ValueKind != JsonValueKind.Object)
+            if (ownerProperty.Value.ValueKind != JsonValueKind.Object)
                 continue;
 
-            var scopeGroups = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
-            foreach (var groupProperty in audienceProperty.Value.EnumerateObject())
+            var scopeGroups = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            foreach (var groupProperty in ownerProperty.Value.EnumerateObject())
             {
                 if (groupProperty.Value.ValueKind != JsonValueKind.Array)
                     continue;
 
-                var permissions = new List<string>();
-                foreach (var permissionElement in groupProperty.Value.EnumerateArray())
-                {
-                    var permission = permissionElement.GetString();
-                    if (!string.IsNullOrWhiteSpace(permission))
-                        permissions.Add(permission);
-                }
+                var permissions = groupProperty.Value
+                    .EnumerateArray()
+                    .Where(element => element.ValueKind == JsonValueKind.String)
+                    .Select(element => element.GetString())
+                    .Where(permission => !string.IsNullOrWhiteSpace(permission))
+                    .Select(permission => permission!)
+                    .ToList();
 
                 scopeGroups[groupProperty.Name] = permissions;
             }
 
-            scopes[audienceProperty.Name] = scopeGroups;
+            scopes[ownerProperty.Name] = scopeGroups;
         }
 
         return scopes;
     }
 
-    private List<string> GetPermissions(
+    private static IReadOnlyCollection<string> GetPermissions(
         Dictionary<string, Dictionary<string, List<string>>> scopes,
-        string scopeGroupName)
+        string scopeOwnerId,
+        string scopeKey)
     {
-        if (!scopes.TryGetValue(_authOptions.SystemId, out var systemScopes))
-            return new List<string>();
+        if (!scopes.TryGetValue(scopeOwnerId, out var ownerScopes))
+            return Array.Empty<string>();
 
-        return systemScopes.TryGetValue(scopeGroupName, out var permissions)
+        return ownerScopes.TryGetValue(scopeKey, out var permissions)
             ? permissions
-            : new List<string>();
+            : Array.Empty<string>();
     }
 
-    private static bool HasAnyRequiredPermission(IEnumerable<string> grantedPermissions, IEnumerable<string> requiredPermissions)
+    private static bool HasAnyRequiredPermission(
+        IEnumerable<string> grantedPermissions,
+        IEnumerable<string> requiredPermissions)
     {
         return requiredPermissions.Any(requiredPermission =>
             grantedPermissions.Contains(requiredPermission, StringComparer.OrdinalIgnoreCase));
@@ -266,97 +395,22 @@ public class TokenAuthorizationHandler : AuthorizationHandler<CustomAuthorizeAtt
             isSuperAdmin;
     }
 
-    private static async Task<string?> ResolveSpaceIdAsync(HttpContext httpContext, string? parameterName)
+    private async Task DenyAsync(
+        AuthorizationHandlerContext authorizationContext,
+        HttpContext httpContext,
+        int statusCode,
+        string error,
+        string message)
     {
-        var name = string.IsNullOrWhiteSpace(parameterName) ? DefaultSpaceIdParameterName : parameterName;
-
-        if (httpContext.Request.RouteValues.TryGetValue(name, out var routeValue) &&
-            TryNormalizeSpaceId(routeValue?.ToString(), out var routeSpaceId))
-        {
-            return routeSpaceId;
-        }
-
-        if (httpContext.Request.Query.TryGetValue(name, out var queryValue) &&
-            TryNormalizeSpaceId(queryValue.FirstOrDefault(), out var querySpaceId))
-        {
-            return querySpaceId;
-        }
-
-        return await TryResolveSpaceIdFromJsonBodyAsync(httpContext, name);
+        await WriteErrorResponseAsync(httpContext, statusCode, error, message);
+        authorizationContext.Fail(new AuthorizationFailureReason(this, message));
     }
 
-    private static async Task<string?> TryResolveSpaceIdFromJsonBodyAsync(HttpContext httpContext, string parameterName)
-    {
-        var request = httpContext.Request;
-        if (request.ContentLength is null or 0 ||
-            string.IsNullOrWhiteSpace(request.ContentType) ||
-            !request.ContentType.Contains("application/json", StringComparison.OrdinalIgnoreCase))
-        {
-            return null;
-        }
-
-        request.EnableBuffering();
-        request.Body.Position = 0;
-
-        try
-        {
-            using var doc = await JsonDocument.ParseAsync(request.Body);
-            if (TryFindJsonProperty(doc.RootElement, parameterName, out var value) &&
-                TryNormalizeSpaceId(value, out var spaceId))
-            {
-                return spaceId;
-            }
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-        finally
-        {
-            request.Body.Position = 0;
-        }
-
-        return null;
-    }
-
-    private static bool TryFindJsonProperty(JsonElement element, string propertyName, out string? value)
-    {
-        value = null;
-        if (element.ValueKind != JsonValueKind.Object)
-            return false;
-
-        foreach (var property in element.EnumerateObject())
-        {
-            if (property.Name.Equals(propertyName, StringComparison.OrdinalIgnoreCase))
-            {
-                value = property.Value.ValueKind switch
-                {
-                    JsonValueKind.Number => property.Value.GetRawText(),
-                    JsonValueKind.String => property.Value.GetString(),
-                    _ => null
-                };
-                return value is not null;
-            }
-        }
-
-        return false;
-    }
-
-    private static bool TryNormalizeSpaceId(string? rawValue, out string spaceId)
-    {
-        spaceId = string.Empty;
-        if (string.IsNullOrWhiteSpace(rawValue))
-            return false;
-
-        rawValue = rawValue.Trim();
-        if (!long.TryParse(rawValue, out var numericSpaceId) || numericSpaceId <= 0)
-            return false;
-
-        spaceId = numericSpaceId.ToString();
-        return true;
-    }
-
-    private static async Task WriteErrorResponseAsync(HttpContext httpContext, int statusCode, string error, string message)
+    private static async Task WriteErrorResponseAsync(
+        HttpContext httpContext,
+        int statusCode,
+        string error,
+        string message)
     {
         if (httpContext.Response.HasStarted)
             return;
@@ -364,19 +418,22 @@ public class TokenAuthorizationHandler : AuthorizationHandler<CustomAuthorizeAtt
         httpContext.Response.StatusCode = statusCode;
         httpContext.Response.ContentType = "application/json";
 
-        var payload = JsonSerializer.Serialize(new
+        await httpContext.Response.WriteAsync(JsonSerializer.Serialize(new
         {
             error,
             message
-        });
-
-        await httpContext.Response.WriteAsync(payload);
+        }));
     }
 
-    private sealed record AuthorizationCheckResult(bool IsAuthorized, string Message)
+    private sealed record ScopeOwnerResolution(bool IsValid, string? SystemId, string Message)
     {
-        public static AuthorizationCheckResult Allowed() => new(true, string.Empty);
-        public static AuthorizationCheckResult Denied(string message) => new(false, message);
+        public static ScopeOwnerResolution Valid(string systemId) => new(true, systemId, string.Empty);
+        public static ScopeOwnerResolution Invalid(string message) => new(false, null, message);
+    }
+
+    private sealed record ScopeKeyResolution(bool IsValid, string? ScopeKey, string Message)
+    {
+        public static ScopeKeyResolution Valid(string scopeKey) => new(true, scopeKey, string.Empty);
+        public static ScopeKeyResolution Invalid(string message) => new(false, null, message);
     }
 }
-

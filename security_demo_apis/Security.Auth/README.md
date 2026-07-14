@@ -1,13 +1,25 @@
 # Security.Auth
 
-Libreria interna para APIs .NET con:
+Librería interna para APIs ASP.NET Core con:
 
-- Validacion Bearer JWT con firma RSA, issuer, audience y lifetime.
-- Autorizacion por permisos de sistema y permisos por place.
-- Reporte de errores hacia Security API.
-- Middleware opcional para capturar excepciones no manejadas.
+- validación de JWT Bearer mediante firma RSA, issuer, audience y vigencia;
+- autorización genérica mediante `SecureAuth`;
+- reporte manual y automático de errores hacia Security API.
 
-## Configuracion
+## Dependencias
+
+La librería apunta a .NET 10. El proyecto consumidor debe poder resolver:
+
+```xml
+<FrameworkReference Include="Microsoft.AspNetCore.App" />
+<PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.19.0" />
+```
+
+Una Web API creada con `Microsoft.NET.Sdk.Web` normalmente ya incluye el framework de ASP.NET Core.
+
+## Configuración
+
+`SystemId` identifica la API que consume la DLL. `ScopeOwners` es la allowlist (lista cerrada) de otros sistemas cuyos permisos puede consultar esa API.
 
 ```json
 {
@@ -17,36 +29,24 @@ Libreria interna para APIs .NET con:
       "SystemId": "fa5492fe-7f66-4ceb-b2a6-adeafc0ff93d",
       "ValidIssuer": "https://auth.blikon.com",
       "ValidAudience": "fa5492fe-7f66-4ceb-b2a6-adeafc0ff93d",
-      "EnableSuperAdminBypass": true
+      "EnableSuperAdminBypass": true,
+      "ScopeOwners": {
+        "developer-system": "57eb7549-aad1-4063-8996-7487e250f87d"
+      }
     },
     "Errors": {
-      "BaseUrl": "https://security-api.dev.com.pro/api/v1",
+      "BaseUrl": "https://security-api.example.com/api/v1",
       "Secret": "secret-del-sistema"
     }
   }
 }
 ```
 
-`Security:Auth:SystemId` identifica el sistema/API que recibe el token. La libreria busca permisos dentro de `scp[SystemId]`.
+Reglas de configuración:
 
-`Security:Auth:ValidAudience` debe coincidir con el audience esperado del JWT entrante.
-
-`Security:Auth:EnableSuperAdminBypass` permite que un token valido con `is_superadmin: true` pase la autorizacion sin exigir el permiso exacto. La validacion de firma, issuer, audience y expiracion nunca se omite.
-
-`Security:Errors:Secret` es el secreto saliente que usa este sistema para autenticarse al registrar errores.
-
-## Dependencias requeridas
-
-La libreria apunta a `net10.0`; el proyecto consumidor debe compilar con SDK .NET 10 y tener runtime ASP.NET Core 10 disponible en despliegue.
-
-Al importar esta libreria en otro proyecto, confirma que el proyecto consumidor pueda resolver estas dependencias:
-
-```xml
-<FrameworkReference Include="Microsoft.AspNetCore.App" />
-<PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.19.0" />
-```
-
-Si el proyecto destino ya es una Web API con `Microsoft.NET.Sdk.Web`, normalmente el framework de ASP.NET Core ya esta disponible. Si es una libreria o proyecto con `Microsoft.NET.Sdk`, agrega el `FrameworkReference` para evitar errores de compilacion.
+- Los aliases de `ScopeOwners` usan kebab-case (palabras minúsculas separadas por guiones).
+- Cada valor de `ScopeOwners` debe ser un GUID diferente de `SystemId`.
+- `EnableSuperAdminBypass` permite omitir el permiso cuando `is_superadmin` es `true`, pero nunca omite la firma, issuer, vigencia ni audiences requeridos.
 
 ## Registro
 
@@ -64,116 +64,157 @@ app.UseAuthorization();
 app.MapControllers();
 ```
 
-## Autorizacion
+## Autorización con `SecureAuth`
 
-### Permisos de sistema
+La regla fundamental es:
 
-Usa `SystemAuthorize` para tokens system-to-system. La libreria valida el permiso exacto dentro de `scp[SystemId].system[]`.
-
-```csharp
-[SystemAuthorize("clientauth.send")]
-[HttpPost("send-code")]
-public IActionResult SendCode() => Ok();
+```text
+aud determina qué sistemas pueden considerarse.
+scp determina qué permisos existen dentro de cada sistema.
 ```
 
-Token esperado:
+Este token se usará en los ejemplos:
 
 ```json
 {
-  "typ": "system",
-  "aud": ["fa5492fe-7f66-4ceb-b2a6-adeafc0ff93d"],
+  "iss": "https://auth.blikon.com",
+  "aud": [
+    "fa5492fe-7f66-4ceb-b2a6-adeafc0ff93d",
+    "57eb7549-aad1-4063-8996-7487e250f87d"
+  ],
   "scp": {
     "fa5492fe-7f66-4ceb-b2a6-adeafc0ff93d": {
-      "system": ["clientauth.send"]
+      "system": ["systems.update"],
+      "place.415": ["user2place.read"]
+    },
+    "57eb7549-aad1-4063-8996-7487e250f87d": {
+      "dev-account.2": ["develop.write", "account.changename"]
     }
   }
 }
 ```
 
-### Permisos por place
+El `SystemId` consumidor debe aparecer siempre en `aud`. Cuando se consulta un propietario externo, su GUID también debe aparecer en `aud`.
 
-Usa `PlaceAuthorize` para tokens de usuario con permisos por place. La libreria valida el permiso exacto dentro de `scp[SystemId].place.{spaceId}[]`.
+### Scope del sistema consumidor
+
+Usa el constructor corto para consultar `scp[SystemId]`:
 
 ```csharp
-[PlaceAuthorize("collections.read")]
-[HttpGet("collections/{spaceId}")]
-public IActionResult GetCollections(int spaceId) => Ok();
+[SecureAuth("system", "systems.update")]
+[HttpPut("systems/{id}")]
+public IActionResult UpdateSystem(string id) => Ok();
 ```
 
-Token esperado:
+La validación busca:
+
+```text
+scp[SystemId]["system"] contiene "systems.update"
+```
+
+`place` no recibe tratamiento especial; es otro customKey:
+
+```csharp
+[SecureAuth("place.{spaceId}", "user2place.read")]
+[HttpGet("places/{spaceId}/users")]
+public IActionResult GetUsers(string spaceId) => Ok();
+```
+
+Para `spaceId = 415`, se consulta `scp[SystemId]["place.415"]`.
+
+### Scope de otro sistema
+
+Usa el constructor largo con un alias registrado en `ScopeOwners`:
+
+```csharp
+[SecureAuth(
+    "developer-system",
+    "dev-account.{accountId}",
+    "develop.write")]
+[HttpPut("developer-accounts/{accountId}")]
+public IActionResult UpdateDeveloperAccount(string accountId) => Ok();
+```
+
+Para `accountId = 2`, se consulta:
+
+```text
+scp[ScopeOwners["developer-system"]]["dev-account.2"]
+```
+
+El propietario del scope se declara en el atributo; nunca se recibe desde route, query o body.
+
+### Placeholder desde `[FromBody]`
+
+También puede resolverse una propiedad raíz del JSON:
+
+```csharp
+public sealed class UpdateDeveloperAccountRequest
+{
+    public string AccountId { get; set; } = string.Empty;
+}
+
+[SecureAuth(
+    "developer-system",
+    "dev-account.{accountId}",
+    "develop.write")]
+[HttpPost("developer-accounts")]
+public IActionResult UpdateDeveloperAccount(
+    [FromBody] UpdateDeveloperAccountRequest request) => Ok();
+```
+
+Body:
 
 ```json
 {
-  "typ": "user",
-  "aud": ["fa5492fe-7f66-4ceb-b2a6-adeafc0ff93d"],
-  "scp": {
-    "fa5492fe-7f66-4ceb-b2a6-adeafc0ff93d": {
-      "place.269": ["collections.read"]
-    }
-  }
+  "accountId": "2"
 }
 ```
 
-`PlaceAuthorize` busca el `spaceId` en este orden:
+Los placeholders se buscan en este orden:
 
-- route values: `/api/collections/{spaceId}`
-- query string: `?spaceId=269`
-- body JSON: `{ "spaceId": 269 }`
-
-Si el parametro se llama distinto, configuralo en el atributo:
-
-```csharp
-[PlaceAuthorize("collections.read", SpaceIdParameterName = "placeId")]
-[HttpGet("places/{placeId}/collections")]
-public IActionResult GetCollections(int placeId) => Ok();
+```text
+Route → Query → propiedad raíz del body JSON
 ```
 
-### Aceptar sistema o place
+Se aceptan strings, números y GUID. No se recorren objetos anidados.
 
-Usa `SystemOrPlaceAuthorize` cuando el endpoint deba aceptar un sistema con permiso de sistema o un usuario con permiso por place.
+### OR y AND
 
-```csharp
-[SystemOrPlaceAuthorize(
-    SystemPermission = "clientauth.send",
-    PlacePermission = "collections.read")]
-[HttpGet("collections/{spaceId}")]
-public IActionResult GetCollections(int spaceId) => Ok();
-```
-
-Este atributo autoriza con semantica OR:
-
-- pasa si existe `clientauth.send` en `scp[SystemId].system[]`;
-- o pasa si existe `collections.read` en `scp[SystemId].place.{spaceId}[]`.
-
-Si apilas `[SystemAuthorize]` y `[PlaceAuthorize]` en un mismo endpoint, ASP.NET Authorization los tratara como AND: el token debe cumplir ambos requisitos.
-
-### Compatibilidad temporal
-
-`CustomAuthorize("permiso")` sigue disponible y se interpreta como autorizacion de sistema contra `scp[SystemId].system[]`. Para codigo nuevo usa `SystemAuthorize`, `PlaceAuthorize` o `SystemOrPlaceAuthorize`.
-
-### Reglas importantes
-
-- Los permisos son exactos y case-insensitive.
-- No hay wildcard por ahora.
-- No se compara por sufijo: `users.read` no cubre `collections.read`.
-- Token invalido, expirado, con firma invalida, issuer invalido o audience invalido => `401`.
-- Token valido sin permiso suficiente => `403`.
-
-## Reporte manual de errores
-
-Para reportar una excepcion capturada y conservar una respuesta personalizada al cliente, usa el overload simplificado:
+Varios permisos separados por comas usan OR: basta con tener uno.
 
 ```csharp
-catch (Exception ex)
-{
-    await _errorReporter.ReportAsync(ex, HttpContext);
-    return StatusCode(500, new { message = "No fue posible procesar la solicitud." });
-}
+[SecureAuth(
+    "developer-system",
+    "dev-account.{accountId}",
+    "develop.write,account.changename")]
 ```
 
-La libreria detecta automaticamente `ExceptionType`, `ErrorMessage`, `Traceback`, archivo, funcion, linea, endpoint, metodo, `requestId` y criticidad. La criticidad usa la misma clasificacion del middleware automatico.
+Varios atributos apilados usan AND: deben cumplirse todos.
 
-Puedes sobrescribir valores opcionales cuando el caso lo requiera:
+```csharp
+[SecureAuth("system", "systems.read")]
+[SecureAuth(
+    "developer-system",
+    "dev-account.{accountId}",
+    "develop.write")]
+```
+
+Los permisos son exactos y case-insensitive (no distinguen mayúsculas y minúsculas). No existen wildcards (comodines como `users.*`) ni coincidencias parciales.
+
+### Respuestas de autorización
+
+| Resultado | Estado |
+| --- | --- |
+| Token ausente, firma/issuer/vigencia inválidos, `ValidAudience` o `SystemId` consumidor ausentes de `aud` | `401 Unauthorized` |
+| Alias externo desconocido o propietario externo ausente de `aud` | `403 Forbidden` |
+| Scope, placeholder o permiso ausente; `scp` mal formado | `403 Forbidden` |
+| Audience, scope y al menos un permiso requeridos presentes | Acceso autorizado |
+
+## Reporte de errores
+
+`UseSecurityErrorReporting()` captura excepciones no controladas, las registra en Security API y responde `500 application/json`.
+
+Para reportar manualmente una excepción:
 
 ```csharp
 catch (Exception ex)
@@ -182,55 +223,10 @@ catch (Exception ex)
         ex,
         HttpContext,
         statusCode: StatusCodes.Status400BadRequest,
-        criticality: "low",
-        additionalInfo: new Dictionary<string, object?>
-        {
-            ["actorType"] = "user",
-            ["userId"] = userId
-        });
+        criticality: "low");
 
-    return BadRequest(new { message = "La solicitud no es valida." });
+    return BadRequest(new { message = "La solicitud no es válida." });
 }
 ```
 
-Si necesitas control total del payload, tambien puedes enviar el modelo completo:
-
-```csharp
-public sealed class MyService
-{
-    private readonly ISecurityErrorReporter _errorReporter;
-
-    public MyService(ISecurityErrorReporter errorReporter)
-    {
-        _errorReporter = errorReporter;
-    }
-
-    public async Task ReportAsync()
-    {
-        await _errorReporter.ReportAsync(new SecurityErrorReport
-        {
-            ExceptionType = "ValueError",
-            ErrorMessage = "Invalid access token provided",
-            Criticality = "critical",
-            Traceback = "Traceback ...",
-            FileName = "authentication_service.py",
-            FunctionName = "validate_access_token",
-            LineNumber = 128,
-            Endpoint = "/api/v1/authentication/tokens/refresh",
-            Method = "POST",
-            StatusCode = 500,
-            AdditionalInfo = new Dictionary<string, object?>
-            {
-                ["actorType"] = "system",
-                ["requestId"] = "req_123456"
-            }
-        });
-    }
-}
-```
-
-## Middleware de errores
-
-`UseSecurityErrorReporting()` captura excepciones no manejadas, obtiene un token con `POST /auth/systems`, registra el error con `POST /errors` y responde `500 application/json`.
-
-El middleware autocompleta datos como `exceptionType`, `errorMessage`, `traceback`, `endpoint`, `method`, `statusCode`, `requestId`, `path`, `queryString` y `host`.
+La librería completa automáticamente datos como tipo de excepción, mensaje, traceback (ruta de llamadas que originó el error), archivo, función, línea, endpoint, método, `requestId` y criticidad.

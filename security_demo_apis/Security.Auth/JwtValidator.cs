@@ -45,6 +45,11 @@ public class JwtValidator
 
                 if (result.SecurityToken is JsonWebToken jwt)
                 {
+                    response.Audiences = jwt.Audiences
+                        .Where(audience => !string.IsNullOrWhiteSpace(audience))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToArray();
+
                     foreach (var claim in jwt.Claims)
                     {
                         if (response.Claims.ContainsKey(claim.Type))
@@ -78,5 +83,6 @@ public class JwtValidator
         public bool IsValid { get; set; }
         public string? ErrorMessage { get; set; }
         public Dictionary<string, string> Claims { get; set; } = new();
+        public IReadOnlyCollection<string> Audiences { get; set; } = Array.Empty<string>();
     }
 }

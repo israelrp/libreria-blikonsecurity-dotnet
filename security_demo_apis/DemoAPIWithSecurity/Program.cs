@@ -33,13 +33,13 @@ builder.Services.AddOpenApi(options =>
     options.AddOperationTransformer((operation, context, cancellationToken) =>
     {
         var endpointMetadata = context.Description.ActionDescriptor.EndpointMetadata;
-        if (endpointMetadata.Any(m => m is CustomAuthorizeAttribute))
+        if (endpointMetadata.Any(m => m is SecureAuthAttribute))
         {
             operation.Security ??= new List<OpenApiSecurityRequirement>();
             var securityRequirement = new OpenApiSecurityRequirement
             {
                 {
-                    new OpenApiSecuritySchemeReference("Bearer", null),
+                    new OpenApiSecuritySchemeReference("Bearer", context.Document),
                     new List<string>()
                 }
             };

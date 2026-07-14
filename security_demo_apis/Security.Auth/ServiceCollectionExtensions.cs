@@ -13,7 +13,10 @@ public static class ServiceCollectionExtensions
     {
         services.AddHttpContextAccessor();
         services.AddHttpClient();
-        services.Configure<SecurityAuthOptions>(configuration.GetSection(SecurityAuthOptions.SectionName));
+        services.AddSingleton<IValidateOptions<SecurityAuthOptions>, SecurityAuthOptionsValidator>();
+        services.AddOptions<SecurityAuthOptions>()
+            .Bind(configuration.GetSection(SecurityAuthOptions.SectionName))
+            .ValidateOnStart();
 
         services.AddSingleton<PublicKeyProvider>();
 

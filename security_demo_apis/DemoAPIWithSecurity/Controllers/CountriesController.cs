@@ -31,7 +31,7 @@ public class CountriesController : ControllerBase
     /// </summary>
     [HttpGet]
     [ProducesResponseType(StatusCodes.Status200OK)]
-    [SystemAuthorize("catalogopaises.read")]
+    [SecureAuth("system", "catalogopaises.read")]
     public ActionResult<IEnumerable<Country>> GetCountries()
     {
         return Ok(Countries);
@@ -42,25 +42,15 @@ public class CountriesController : ControllerBase
     /// </summary>
     [HttpGet("place/{spaceId}")]
     [ProducesResponseType(StatusCodes.Status200OK)]
-    [PlaceAuthorize("catalogopaises.read")]
+    [SecureAuth("place.{spaceId}", "catalogopaises.read")]
     public ActionResult<IEnumerable<Country>> GetCountriesByPlace(int spaceId)
     {
         return Ok(new { spaceId, countries = Countries });
     }
 
     /// <summary>
-    /// Obtiene países aceptando permiso de sistema o permiso por place.
+    /// Genera un error de prueba para el middleware de reporte.
     /// </summary>
-    [HttpGet("hybrid/{spaceId}")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
-    [SystemOrPlaceAuthorize(
-        SystemPermission = "catalogopaises.read",
-        PlacePermission = "catalogopaises.read")]
-    public ActionResult<IEnumerable<Country>> GetCountriesHybrid(int spaceId)
-    {
-        return Ok(new { spaceId, countries = Countries });
-    }
-
     [HttpGet("demo-error")]
     [ProducesResponseType(StatusCodes.Status500InternalServerError)]
     public IActionResult DemoError()
