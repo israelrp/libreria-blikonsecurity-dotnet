@@ -94,7 +94,10 @@ Este token se usará en los ejemplos:
 }
 ```
 
-El `SystemId` consumidor debe aparecer siempre en `aud`. Cuando se consulta un propietario externo, su GUID también debe aparecer en `aud`.
+La audiencia requerida depende del propietario del scope solicitado:
+
+- con el constructor corto, el token debe incluir al sistema consumidor en `aud`;
+- con el constructor largo, el token debe incluir en `aud` al sistema configurado en `ScopeOwners`. El sistema consumidor no es obligatorio, lo que permite endpoints puente que autorizan exclusivamente con scopes externos.
 
 ### Scope del sistema consumidor
 

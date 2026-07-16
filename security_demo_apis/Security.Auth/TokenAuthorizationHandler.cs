@@ -59,11 +59,23 @@ public sealed class TokenAuthorizationHandler : AuthorizationHandler<SecureAuthA
 
         try
         {
+            var scopeOwnerResult = ResolveScopeOwner(requirement.ScopeOwner);
+            if (!scopeOwnerResult.IsValid)
+            {
+                _logger.LogWarning("ScopeOwner rechazado: {Reason}", scopeOwnerResult.Message);
+                await DenyAsync(context, httpContext, StatusCodes.Status403Forbidden, "forbidden", scopeOwnerResult.Message);
+                return;
+            }
+
+            var requiredAudience = requirement.ScopeOwner is null
+                ? _authOptions.ValidAudience
+                : scopeOwnerResult.SystemId!;
+
             var jwtResult = await JwtValidator.ValidarTokenAsync(
                 token,
                 _publicKeyProvider.PublicKeyPem,
                 _authOptions.ValidIssuer,
-                _authOptions.ValidAudience);
+                requiredAudience);
 
             if (!jwtResult.IsValid)
             {
@@ -73,31 +85,12 @@ public sealed class TokenAuthorizationHandler : AuthorizationHandler<SecureAuthA
                 return;
             }
 
-            if (!ContainsAudience(jwtResult.Audiences, _authOptions.SystemId))
+            if (requirement.ScopeOwner is null &&
+                !ContainsAudience(jwtResult.Audiences, _authOptions.SystemId))
             {
                 const string message = "El token no esta destinado al sistema consumidor.";
                 _logger.LogWarning("SystemId {SystemId} no esta presente en aud.", _authOptions.SystemId);
                 await DenyAsync(context, httpContext, StatusCodes.Status401Unauthorized, "unauthorized", message);
-                return;
-            }
-
-            var scopeOwnerResult = ResolveScopeOwner(requirement.ScopeOwner);
-            if (!scopeOwnerResult.IsValid)
-            {
-                _logger.LogWarning("ScopeOwner rechazado: {Reason}", scopeOwnerResult.Message);
-                await DenyAsync(context, httpContext, StatusCodes.Status403Forbidden, "forbidden", scopeOwnerResult.Message);
-                return;
-            }
-
-            if (requirement.ScopeOwner is not null &&
-                !ContainsAudience(jwtResult.Audiences, scopeOwnerResult.SystemId!))
-            {
-                var message = $"El token no esta destinado al propietario de scope '{requirement.ScopeOwner}'.";
-                _logger.LogWarning(
-                    "ScopeOwner {ScopeOwner} con SystemId {ScopeOwnerId} no esta presente en aud.",
-                    requirement.ScopeOwner,
-                    scopeOwnerResult.SystemId);
-                await DenyAsync(context, httpContext, StatusCodes.Status403Forbidden, "forbidden", message);
                 return;
             }
 

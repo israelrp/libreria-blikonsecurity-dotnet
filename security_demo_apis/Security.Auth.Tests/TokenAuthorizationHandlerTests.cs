@@ -55,7 +55,7 @@ public sealed class TokenAuthorizationHandlerTests
     {
         var result = await AuthorizeAsync(
             new SecureAuthAttribute("developer-system", "dev-account.2", "develop.write"),
-            [ConsumerSystemId, DeveloperSystemId],
+            [DeveloperSystemId],
             Scopes((DeveloperSystemId, "dev-account.2", new[] { "develop.write" })));
 
         Assert.That(result.AuthorizationContext.HasSucceeded, Is.True);
@@ -78,17 +78,18 @@ public sealed class TokenAuthorizationHandlerTests
     }
 
     [Test]
-    public async Task PropietarioExternoAusenteDeAudience_Responde403AunqueExistaEnScopes()
+    public async Task PropietarioExternoAusenteDeAudience_Responde401AunqueExistaEnScopes()
     {
         var result = await AuthorizeAsync(
             new SecureAuthAttribute("developer-system", "dev-account.2", "develop.write"),
             [ConsumerSystemId],
-            Scopes((DeveloperSystemId, "dev-account.2", new[] { "develop.write" })));
+            Scopes((DeveloperSystemId, "dev-account.2", new[] { "develop.write" })),
+            validAudience: ConsumerSystemId);
 
         Assert.Multiple(() =>
         {
             Assert.That(result.AuthorizationContext.HasSucceeded, Is.False);
-            Assert.That(result.HttpContext.Response.StatusCode, Is.EqualTo(StatusCodes.Status403Forbidden));
+            Assert.That(result.HttpContext.Response.StatusCode, Is.EqualTo(StatusCodes.Status401Unauthorized));
         });
     }
 
