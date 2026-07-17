@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -18,17 +19,21 @@ public sealed class TokenAuthorizationHandler : AuthorizationHandler<SecureAuthA
     private readonly SecurityAuthOptions _authOptions;
     private readonly PublicKeyProvider _publicKeyProvider;
     private readonly ILogger<TokenAuthorizationHandler> _logger;
+    private readonly bool _detailedAuthorizationLogsEnabled;
 
     public TokenAuthorizationHandler(
         IHttpContextAccessor httpContextAccessor,
         IOptions<SecurityAuthOptions> authOptions,
         PublicKeyProvider publicKeyProvider,
-        ILogger<TokenAuthorizationHandler> logger)
+        ILogger<TokenAuthorizationHandler> logger,
+        IHostEnvironment? hostEnvironment = null)
     {
         _httpContextAccessor = httpContextAccessor;
         _authOptions = authOptions.Value;
         _publicKeyProvider = publicKeyProvider;
         _logger = logger;
+        _detailedAuthorizationLogsEnabled =
+            hostEnvironment?.IsDevelopment() == true || hostEnvironment?.IsStaging() == true;
 
         if (string.IsNullOrWhiteSpace(_authOptions.SystemId))
             throw new InvalidOperationException("Security:Auth:SystemId no esta configurado.");
@@ -59,10 +64,12 @@ public sealed class TokenAuthorizationHandler : AuthorizationHandler<SecureAuthA
 
         try
         {
+            LogAuthorizationEvaluation(httpContext, requirement);
+
             var scopeOwnerResult = ResolveScopeOwner(requirement.ScopeOwner);
             if (!scopeOwnerResult.IsValid)
             {
-                _logger.LogWarning("ScopeOwner rechazado: {Reason}", scopeOwnerResult.Message);
+                LogAuthorizationDenied(httpContext, scopeOwnerResult.Message);
                 await DenyAsync(context, httpContext, StatusCodes.Status403Forbidden, "forbidden", scopeOwnerResult.Message);
                 return;
             }
@@ -80,7 +87,7 @@ public sealed class TokenAuthorizationHandler : AuthorizationHandler<SecureAuthA
             if (!jwtResult.IsValid)
             {
                 var message = jwtResult.ErrorMessage ?? "Token invalido.";
-                _logger.LogWarning("Token invalido: {Message}", message);
+                LogAuthorizationDenied(httpContext, message);
                 await DenyAsync(context, httpContext, StatusCodes.Status401Unauthorized, "unauthorized", message);
                 return;
             }
@@ -89,13 +96,14 @@ public sealed class TokenAuthorizationHandler : AuthorizationHandler<SecureAuthA
                 !ContainsAudience(jwtResult.Audiences, _authOptions.SystemId))
             {
                 const string message = "El token no esta destinado al sistema consumidor.";
-                _logger.LogWarning("SystemId {SystemId} no esta presente en aud.", _authOptions.SystemId);
+                LogAuthorizationDenied(httpContext, message);
                 await DenyAsync(context, httpContext, StatusCodes.Status401Unauthorized, "unauthorized", message);
                 return;
             }
 
             if (_authOptions.EnableSuperAdminBypass && IsSuperAdmin(jwtResult.Claims))
             {
+                LogAuthorizationSucceeded(httpContext, requirement, "superadmin_bypass");
                 context.Succeed(requirement);
                 return;
             }
@@ -103,7 +111,7 @@ public sealed class TokenAuthorizationHandler : AuthorizationHandler<SecureAuthA
             var scopeKeyResult = await ResolveScopeKeyAsync(httpContext, requirement.ScopeKey);
             if (!scopeKeyResult.IsValid)
             {
-                _logger.LogWarning("ScopeKey rechazado: {Reason}", scopeKeyResult.Message);
+                LogAuthorizationDenied(httpContext, scopeKeyResult.Message);
                 await DenyAsync(context, httpContext, StatusCodes.Status403Forbidden, "forbidden", scopeKeyResult.Message);
                 return;
             }
@@ -112,6 +120,7 @@ public sealed class TokenAuthorizationHandler : AuthorizationHandler<SecureAuthA
             if (requiredPermissions.Length == 0)
             {
                 const string message = "No se configuro ningun permiso requerido.";
+                LogAuthorizationDenied(httpContext, message);
                 await DenyAsync(context, httpContext, StatusCodes.Status403Forbidden, "forbidden", message);
                 return;
             }
@@ -120,21 +129,26 @@ public sealed class TokenAuthorizationHandler : AuthorizationHandler<SecureAuthA
             var grantedPermissions = GetPermissions(scopes, scopeOwnerResult.SystemId!, scopeKeyResult.ScopeKey!);
             if (HasAnyRequiredPermission(grantedPermissions, requiredPermissions))
             {
+                LogAuthorizationSucceeded(httpContext, requirement, "required_permission_granted");
                 context.Succeed(requirement);
                 return;
             }
 
             var deniedMessage =
                 $"No tiene ninguno de los permisos requeridos en '{scopeKeyResult.ScopeKey}': {requirement.Permission}.";
-            _logger.LogWarning(
-                "Permiso denegado para ScopeOwner {ScopeOwnerId}, ScopeKey {ScopeKey}.",
-                scopeOwnerResult.SystemId,
-                scopeKeyResult.ScopeKey);
+            LogPermissionDenied(
+                httpContext,
+                jwtResult,
+                scopes,
+                scopeOwnerResult.SystemId!,
+                scopeKeyResult.ScopeKey!,
+                requiredPermissions,
+                grantedPermissions);
             await DenyAsync(context, httpContext, StatusCodes.Status403Forbidden, "forbidden", deniedMessage);
         }
         catch (JsonException ex)
         {
-            _logger.LogWarning(ex, "El claim scp tiene formato invalido.");
+            LogAuthorizationDenied(httpContext, "El claim scp tiene formato invalido.", ex);
             await DenyAsync(
                 context,
                 httpContext,
@@ -332,7 +346,7 @@ public sealed class TokenAuthorizationHandler : AuthorizationHandler<SecureAuthA
             if (ownerProperty.Value.ValueKind != JsonValueKind.Object)
                 continue;
 
-            var scopeGroups = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            var scopeGroups = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
             foreach (var groupProperty in ownerProperty.Value.EnumerateObject())
             {
                 if (groupProperty.Value.ValueKind != JsonValueKind.Array)
@@ -386,6 +400,102 @@ public sealed class TokenAuthorizationHandler : AuthorizationHandler<SecureAuthA
         return claims.TryGetValue("is_superadmin", out var value) &&
             bool.TryParse(value, out var isSuperAdmin) &&
             isSuperAdmin;
+    }
+
+    private void LogAuthorizationEvaluation(HttpContext httpContext, SecureAuthAttribute requirement)
+    {
+        if (!_detailedAuthorizationLogsEnabled)
+            return;
+
+        _logger.LogDebug(
+            "Evaluando autorizacion. TraceId: {TraceId}, Method: {Method}, Path: {Path}, " +
+            "ScopeOwnerAlias: {ScopeOwnerAlias}, ScopeKeyTemplate: {ScopeKeyTemplate}, " +
+            "RequiredPermissions: {RequiredPermissions}, ConsumerSystemId: {ConsumerSystemId}.",
+            httpContext.TraceIdentifier,
+            httpContext.Request.Method,
+            httpContext.Request.Path,
+            requirement.ScopeOwner ?? "(consumer-system)",
+            requirement.ScopeKey,
+            requirement.Permission,
+            _authOptions.SystemId);
+    }
+
+    private void LogAuthorizationSucceeded(
+        HttpContext httpContext,
+        SecureAuthAttribute requirement,
+        string reason)
+    {
+        if (!_detailedAuthorizationLogsEnabled)
+            return;
+
+        _logger.LogDebug(
+            "Autorizacion concedida. TraceId: {TraceId}, Path: {Path}, ScopeKey: {ScopeKey}, " +
+            "RequiredPermissions: {RequiredPermissions}, Reason: {Reason}.",
+            httpContext.TraceIdentifier,
+            httpContext.Request.Path,
+            requirement.ScopeKey,
+            requirement.Permission,
+            reason);
+    }
+
+    private void LogAuthorizationDenied(HttpContext httpContext, string reason, Exception? exception = null)
+    {
+        if (_detailedAuthorizationLogsEnabled)
+        {
+            _logger.LogWarning(
+                exception,
+                "Autorizacion rechazada. TraceId: {TraceId}, Method: {Method}, Path: {Path}, Reason: {Reason}.",
+                httpContext.TraceIdentifier,
+                httpContext.Request.Method,
+                httpContext.Request.Path,
+                reason);
+            return;
+        }
+
+        _logger.LogWarning(
+            "Autorizacion rechazada. TraceId: {TraceId}.",
+            httpContext.TraceIdentifier);
+    }
+
+    private void LogPermissionDenied(
+        HttpContext httpContext,
+        JwtValidator.JwtValidationResult jwtResult,
+        Dictionary<string, Dictionary<string, List<string>>> scopes,
+        string scopeOwnerId,
+        string scopeKey,
+        IReadOnlyCollection<string> requiredPermissions,
+        IReadOnlyCollection<string> grantedPermissions)
+    {
+        if (!_detailedAuthorizationLogsEnabled)
+        {
+            LogAuthorizationDenied(httpContext, "Permiso requerido no concedido.");
+            return;
+        }
+
+        var hasScopeClaim = jwtResult.Claims.TryGetValue("scp", out var scpClaim) &&
+            !string.IsNullOrWhiteSpace(scpClaim);
+        var hasScopeOwner = scopes.TryGetValue(scopeOwnerId, out var ownerScopes);
+        var hasScopeKey = hasScopeOwner && ownerScopes!.ContainsKey(scopeKey);
+        var reason = !hasScopeClaim
+            ? "El token no contiene un claim scp utilizable."
+            : !hasScopeOwner
+                ? "El claim scp no contiene el ScopeOwner requerido."
+                : !hasScopeKey
+                    ? "El ScopeOwner existe, pero no contiene el ScopeKey requerido."
+                    : "El ScopeKey existe, pero no contiene ninguno de los permisos requeridos.";
+
+        _logger.LogWarning(
+            "Autorizacion rechazada. TraceId: {TraceId}, Method: {Method}, Path: {Path}, " +
+            "Reason: {Reason}, ScopeOwnerId: {ScopeOwnerId}, ScopeKey: {ScopeKey}, " +
+            "RequiredPermissions: {RequiredPermissions}, GrantedPermissions: {GrantedPermissions}.",
+            httpContext.TraceIdentifier,
+            httpContext.Request.Method,
+            httpContext.Request.Path,
+            reason,
+            scopeOwnerId,
+            scopeKey,
+            string.Join(",", requiredPermissions),
+            grantedPermissions.Count == 0 ? "(none)" : string.Join(",", grantedPermissions));
     }
 
     private async Task DenyAsync(

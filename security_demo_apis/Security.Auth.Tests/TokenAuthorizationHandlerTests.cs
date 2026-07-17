@@ -219,14 +219,14 @@ public sealed class TokenAuthorizationHandlerTests
     }
 
     [Test]
-    public async Task ScopeKeyEsExacto_NoAutorizaConDiferenteCasing()
+    public async Task ScopeKeyConDiferenteCasing_Autoriza()
     {
         var result = await AuthorizeAsync(
             new SecureAuthAttribute("developer-system", "dev-account.2", "develop.write"),
             [ConsumerSystemId, DeveloperSystemId],
             Scopes((DeveloperSystemId, "DEV-ACCOUNT.2", new[] { "develop.write" })));
 
-        Assert.That(result.HttpContext.Response.StatusCode, Is.EqualTo(StatusCodes.Status403Forbidden));
+        Assert.That(result.AuthorizationContext.HasSucceeded, Is.True);
     }
 
     [Test]
@@ -357,7 +357,7 @@ public sealed class TokenAuthorizationHandlerTests
         {
             if (!scopes.TryGetValue(entry.OwnerId, out var ownerScopes))
             {
-                ownerScopes = new Dictionary<string, string[]>(StringComparer.Ordinal);
+                ownerScopes = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
                 scopes[entry.OwnerId] = ownerScopes;
             }
 

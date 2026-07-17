@@ -202,7 +202,7 @@ Varios atributos apilados usan AND: deben cumplirse todos.
     "develop.write")]
 ```
 
-Los permisos son exactos y case-insensitive (no distinguen mayúsculas y minúsculas). No existen wildcards (comodines como `users.*`) ni coincidencias parciales.
+Las claves de scope y los permisos son exactos y case-insensitive (no distinguen mayúsculas y minúsculas). No existen wildcards (comodines como `users.*`) ni coincidencias parciales.
 
 ### Respuestas de autorización
 
