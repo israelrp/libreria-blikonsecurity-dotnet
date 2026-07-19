@@ -9,7 +9,10 @@ namespace Security.Auth;
 
 public static class ServiceCollectionExtensions
 {
-    public static IServiceCollection AddCustomTokenAuth(this IServiceCollection services, IConfiguration configuration)
+    public static IServiceCollection AddCustomTokenAuth(
+        this IServiceCollection services,
+        IConfiguration configuration,
+        bool useAsDefault = true)
     {
         services.AddHttpContextAccessor();
         services.AddHttpClient();
@@ -20,13 +23,18 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<PublicKeyProvider>();
 
-        services.AddAuthentication(options =>
+        var authenticationBuilder = useAsDefault
+            ? services.AddAuthentication(options =>
             {
-                options.DefaultAuthenticateScheme = "Bearer";
-                options.DefaultChallengeScheme = "Bearer";
-                options.DefaultForbidScheme = "Bearer";
+                options.DefaultAuthenticateScheme = SecurityAuthDefaults.AuthenticationScheme;
+                options.DefaultChallengeScheme = SecurityAuthDefaults.AuthenticationScheme;
+                options.DefaultForbidScheme = SecurityAuthDefaults.AuthenticationScheme;
             })
-            .AddScheme<AuthenticationSchemeOptions, NoOpAuthHandler>("Bearer", _ => { });
+            : services.AddAuthentication();
+
+        authenticationBuilder.AddScheme<AuthenticationSchemeOptions, NoOpAuthHandler>(
+            SecurityAuthDefaults.AuthenticationScheme,
+            _ => { });
 
         services.AddScoped<IAuthorizationHandler, TokenAuthorizationHandler>();
         services.AddAuthorization();

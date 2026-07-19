@@ -64,7 +64,25 @@ app.UseAuthorization();
 app.MapControllers();
 ```
 
+La llamada anterior conserva `Bearer` como esquema predeterminado. Si la API ya
+tiene otra autenticacion predeterminada y debe convivir con Security.Auth, registra
+la libreria sin reemplazarla:
+
+```csharp
+builder.Services.AddCustomTokenAuth(
+    builder.Configuration,
+    useAsDefault: false);
+```
+
+`SecureAuth` selecciona explicitamente el esquema `Bearer` de esta libreria. Los
+proyectos existentes que usan solamente Security.Auth no necesitan cambiar su
+registro.
+
 ## Autorización con `SecureAuth`
+
+Los endpoints protegidos por esta libreria deben usar `SecureAuth`. El esquema de
+autenticacion interno es deliberadamente auxiliar y `[Authorize]` por si solo no
+ejecuta la validacion de token y permisos descrita en esta seccion.
 
 La regla fundamental es:
 

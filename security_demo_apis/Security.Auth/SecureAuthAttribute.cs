@@ -7,12 +7,14 @@ public sealed class SecureAuthAttribute : AuthorizeAttribute, IAuthorizationRequ
 {
     public SecureAuthAttribute(string scopeKey, string permission)
     {
+        AuthenticationSchemes = SecurityAuthDefaults.AuthenticationScheme;
         ScopeKey = scopeKey;
         Permission = permission;
     }
 
     public SecureAuthAttribute(string scopeOwner, string scopeKey, string permission)
     {
+        AuthenticationSchemes = SecurityAuthDefaults.AuthenticationScheme;
         ScopeOwner = scopeOwner;
         ScopeKey = scopeKey;
         Permission = permission;

@@ -15,8 +15,10 @@ public class NoOpAuthHandler : AuthenticationHandler<AuthenticationSchemeOptions
 
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
-        var identity = new ClaimsIdentity("Bearer");
-        var ticket = new AuthenticationTicket(new ClaimsPrincipal(identity), "Bearer");
+        var identity = new ClaimsIdentity(SecurityAuthDefaults.AuthenticationScheme);
+        var ticket = new AuthenticationTicket(
+            new ClaimsPrincipal(identity),
+            SecurityAuthDefaults.AuthenticationScheme);
         return Task.FromResult(AuthenticateResult.Success(ticket));
     }
 
