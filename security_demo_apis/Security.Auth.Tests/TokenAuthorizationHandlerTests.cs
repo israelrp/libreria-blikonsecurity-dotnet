@@ -15,6 +15,7 @@ namespace Security.Auth.Tests;
 [TestFixture]
 public sealed class TokenAuthorizationHandlerTests
 {
+    private const string BlikonId = "3da284b8-311a-4e8f-b228-41086bac4e46";
     private const string Issuer = "https://auth.blikon.com";
     private const string ConsumerSystemId = "c1f93345-201e-45ba-b36a-fd2085b07b64";
     private const string DeveloperSystemId = "57eb7549-aad1-4063-8996-7487e250f87d";
@@ -48,6 +49,23 @@ public sealed class TokenAuthorizationHandlerTests
             Scopes((ConsumerSystemId, "system", new[] { "systems.update" })));
 
         Assert.That(result.AuthorizationContext.HasSucceeded, Is.True);
+    }
+
+    [Test]
+    public async Task TokenValido_ExponeBlikonIdEnPrincipalAutenticado()
+    {
+        var result = await AuthorizeAsync(
+            new SecureAuthAttribute("system", "systems.update"),
+            [ConsumerSystemId],
+            Scopes((ConsumerSystemId, "system", new[] { "systems.update" })));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.AuthorizationContext.User.Identity?.IsAuthenticated, Is.True);
+            Assert.That(
+                result.AuthorizationContext.User.FindFirst("blikon_id")?.Value,
+                Is.EqualTo(BlikonId));
+        });
     }
 
     [Test]
@@ -306,9 +324,18 @@ public sealed class TokenAuthorizationHandlerTests
             publicKeyProvider,
             NullLogger<TokenAuthorizationHandler>.Instance);
 
+        var validationResult = await JwtValidator.ValidarTokenAsync(
+            token,
+            publicKeyProvider.PublicKeyPem,
+            Issuer,
+            new[] { ConsumerSystemId, DeveloperSystemId, validAudience ?? ConsumerSystemId });
+        var principal = validationResult.Principal ??
+            new ClaimsPrincipal(new ClaimsIdentity());
+        httpContext.User = principal;
+
         var authorizationContext = new AuthorizationHandlerContext(
             requirements,
-            new ClaimsPrincipal(new ClaimsIdentity()),
+            principal,
             httpContext);
 
         await handler.HandleAsync(authorizationContext);
@@ -323,7 +350,8 @@ public sealed class TokenAuthorizationHandlerTests
     {
         var claims = new Dictionary<string, object>
         {
-            ["is_superadmin"] = false
+            ["is_superadmin"] = false,
+            ["blikon_id"] = BlikonId
         };
 
         if (rawScopeClaim is not null)

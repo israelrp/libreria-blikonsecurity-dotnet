@@ -14,18 +14,15 @@ public sealed class ProtectedApiClient : IProtectedApiClient
     private readonly HttpClient _httpClient;
     private readonly IBlikonTokenProvider _tokenProvider;
     private readonly ILogger<ProtectedApiClient> _logger;
-    private readonly IHostEnvironment _environment;
 
     public ProtectedApiClient(
         HttpClient httpClient,
         IBlikonTokenProvider tokenProvider,
-        ILogger<ProtectedApiClient> logger,
-        IHostEnvironment environment)
+        ILogger<ProtectedApiClient> logger)
     {
         _httpClient = httpClient;
         _tokenProvider = tokenProvider;
         _logger = logger;
-        _environment = environment;
     }
 
     public Task<TResponse?> GetAsync<TResponse>(string requestUri, CancellationToken cancellationToken = default) =>
@@ -45,11 +42,6 @@ public sealed class ProtectedApiClient : IProtectedApiClient
     {
         using var request = new HttpRequestMessage(method, requestUri);
         var token = await _tokenProvider.GetTokenAsync(cancellationToken);
-
-        if (_environment.IsDevelopment())
-        {
-            _logger.LogWarning("Blikon bearer token: {Token}", token);
-        }
 
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 

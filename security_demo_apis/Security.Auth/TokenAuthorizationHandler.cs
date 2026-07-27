@@ -17,7 +17,6 @@ public sealed class TokenAuthorizationHandler : AuthorizationHandler<SecureAuthA
 
     private readonly IHttpContextAccessor _httpContextAccessor;
     private readonly SecurityAuthOptions _authOptions;
-    private readonly PublicKeyProvider _publicKeyProvider;
     private readonly ILogger<TokenAuthorizationHandler> _logger;
     private readonly bool _detailedAuthorizationLogsEnabled;
 
@@ -30,7 +29,7 @@ public sealed class TokenAuthorizationHandler : AuthorizationHandler<SecureAuthA
     {
         _httpContextAccessor = httpContextAccessor;
         _authOptions = authOptions.Value;
-        _publicKeyProvider = publicKeyProvider;
+        _ = publicKeyProvider;
         _logger = logger;
         _detailedAuthorizationLogsEnabled =
             hostEnvironment?.IsDevelopment() == true || hostEnvironment?.IsStaging() == true;
@@ -56,9 +55,14 @@ public sealed class TokenAuthorizationHandler : AuthorizationHandler<SecureAuthA
             return;
         }
 
-        if (!TryGetBearerToken(httpContext, out var token, out var headerError))
+        if (context.User.Identity?.IsAuthenticated != true)
         {
-            await DenyAsync(context, httpContext, StatusCodes.Status401Unauthorized, "unauthorized", headerError);
+            await DenyAsync(
+                context,
+                httpContext,
+                StatusCodes.Status401Unauthorized,
+                "unauthorized",
+                "Token no autenticado.");
             return;
         }
 
@@ -78,24 +82,13 @@ public sealed class TokenAuthorizationHandler : AuthorizationHandler<SecureAuthA
                 ? _authOptions.ValidAudience
                 : scopeOwnerResult.SystemId!;
 
-            var jwtResult = await JwtValidator.ValidarTokenAsync(
-                token,
-                _publicKeyProvider.PublicKeyPem,
-                _authOptions.ValidIssuer,
-                requiredAudience);
+            var jwtResult = JwtValidator.FromPrincipal(context.User);
 
-            if (!jwtResult.IsValid)
-            {
-                var message = jwtResult.ErrorMessage ?? "Token invalido.";
-                LogAuthorizationDenied(httpContext, message);
-                await DenyAsync(context, httpContext, StatusCodes.Status401Unauthorized, "unauthorized", message);
-                return;
-            }
-
-            if (requirement.ScopeOwner is null &&
+            if (!ContainsAudience(jwtResult.Audiences, requiredAudience) ||
+                requirement.ScopeOwner is null &&
                 !ContainsAudience(jwtResult.Audiences, _authOptions.SystemId))
             {
-                const string message = "El token no esta destinado al sistema consumidor.";
+                const string message = "El token no esta destinado al sistema requerido.";
                 LogAuthorizationDenied(httpContext, message);
                 await DenyAsync(context, httpContext, StatusCodes.Status401Unauthorized, "unauthorized", message);
                 return;
@@ -166,36 +159,6 @@ public sealed class TokenAuthorizationHandler : AuthorizationHandler<SecureAuthA
                 "unauthorized",
                 "Error interno durante la validacion del token.");
         }
-    }
-
-    private static bool TryGetBearerToken(
-        HttpContext httpContext,
-        out string token,
-        out string errorMessage)
-    {
-        token = string.Empty;
-        errorMessage = string.Empty;
-
-        if (!httpContext.Request.Headers.TryGetValue("Authorization", out var authHeaderValues))
-        {
-            errorMessage = "Token no proporcionado.";
-            return false;
-        }
-
-        var authHeader = authHeaderValues.ToString();
-        if (string.IsNullOrWhiteSpace(authHeader) ||
-            !authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-        {
-            errorMessage = "Esquema de autorizacion invalido.";
-            return false;
-        }
-
-        token = authHeader["Bearer ".Length..].Trim();
-        if (token.Length > 0)
-            return true;
-
-        errorMessage = "Token no proporcionado.";
-        return false;
     }
 
     private ScopeOwnerResolution ResolveScopeOwner(string? scopeOwner)

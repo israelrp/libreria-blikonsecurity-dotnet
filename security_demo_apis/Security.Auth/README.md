@@ -78,11 +78,23 @@ builder.Services.AddCustomTokenAuth(
 proyectos existentes que usan solamente Security.Auth no necesitan cambiar su
 registro.
 
+Despues de autenticar un JWT valido, la DLL publica sus claims en
+`HttpContext.User` mediante el contrato estandar de ASP.NET Core:
+
+```csharp
+var blikonId = User.FindFirst("blikon_id")?.Value;
+```
+
+La autenticacion valida el token y construye la identidad. Posteriormente,
+`SecureAuth` evalua audiences, scopes y permisos sobre esa identidad validada.
+
 ## Autorización con `SecureAuth`
 
-Los endpoints protegidos por esta libreria deben usar `SecureAuth`. El esquema de
-autenticacion interno es deliberadamente auxiliar y `[Authorize]` por si solo no
-ejecuta la validacion de token y permisos descrita en esta seccion.
+Los endpoints que requieran scopes y permisos de esta libreria deben usar
+`SecureAuth`. Cuando `Bearer` es el esquema predeterminado, `[Authorize]` valida
+la identidad del token, pero no evalua los permisos declarados mediante scopes.
+En una migracion con `useAsDefault: false`, `[Authorize]` continua usando el
+esquema predeterminado que haya configurado la aplicacion.
 
 La regla fundamental es:
 

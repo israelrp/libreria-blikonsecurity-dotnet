@@ -32,7 +32,7 @@ public static class ServiceCollectionExtensions
             })
             : services.AddAuthentication();
 
-        authenticationBuilder.AddScheme<AuthenticationSchemeOptions, NoOpAuthHandler>(
+        authenticationBuilder.AddScheme<AuthenticationSchemeOptions, SecurityTokenAuthenticationHandler>(
             SecurityAuthDefaults.AuthenticationScheme,
             _ => { });
 

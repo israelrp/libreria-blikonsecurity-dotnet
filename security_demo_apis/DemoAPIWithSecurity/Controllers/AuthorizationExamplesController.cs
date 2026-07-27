@@ -10,6 +10,19 @@ namespace DemoAPIWithSecurity.Controllers;
 public sealed class AuthorizationExamplesController : ControllerBase
 {
     /// <summary>
+    /// Demuestra que los claims validados estan disponibles en HttpContext.User.
+    /// </summary>
+    [HttpGet("current-user")]
+    [SecureAuth("system", "catalogopaises.read")]
+    public IActionResult GetCurrentUser()
+    {
+        return Ok(new
+        {
+            blikonId = User.FindFirst("blikon_id")?.Value
+        });
+    }
+
+    /// <summary>
     /// Valida un scope externo usando el accountId de la ruta.
     /// </summary>
     [HttpGet("developer-accounts/{accountId}")]
