@@ -461,34 +461,17 @@ public sealed class TokenAuthorizationHandler : AuthorizationHandler<SecureAuthA
             grantedPermissions.Count == 0 ? "(none)" : string.Join(",", grantedPermissions));
     }
 
-    private async Task DenyAsync(
+    private Task DenyAsync(
         AuthorizationHandlerContext authorizationContext,
         HttpContext httpContext,
         int statusCode,
         string error,
         string message)
     {
-        await WriteErrorResponseAsync(httpContext, statusCode, error, message);
+        httpContext.Items[SecurityAuthorizationFailure.ItemKey] =
+            new SecurityAuthorizationFailure(statusCode, error, message);
         authorizationContext.Fail(new AuthorizationFailureReason(this, message));
-    }
-
-    private static async Task WriteErrorResponseAsync(
-        HttpContext httpContext,
-        int statusCode,
-        string error,
-        string message)
-    {
-        if (httpContext.Response.HasStarted)
-            return;
-
-        httpContext.Response.StatusCode = statusCode;
-        httpContext.Response.ContentType = "application/json";
-
-        await httpContext.Response.WriteAsync(JsonSerializer.Serialize(new
-        {
-            error,
-            message
-        }));
+        return Task.CompletedTask;
     }
 
     private sealed record ScopeOwnerResolution(bool IsValid, string? SystemId, string Message)

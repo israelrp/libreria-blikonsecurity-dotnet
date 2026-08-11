@@ -80,7 +80,7 @@ public sealed class TokenAuthorizationHandlerTests
     }
 
     [Test]
-    public async Task SistemaConsumidorAusenteDeAudience_Responde401()
+    public async Task SistemaConsumidorAusenteDeAudience_RechazaSinIniciarRespuesta()
     {
         var result = await AuthorizeAsync(
             new SecureAuthAttribute("system", "systems.update"),
@@ -90,13 +90,13 @@ public sealed class TokenAuthorizationHandlerTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(result.AuthorizationContext.HasSucceeded, Is.False);
-            Assert.That(result.HttpContext.Response.StatusCode, Is.EqualTo(StatusCodes.Status401Unauthorized));
+            Assert.That(result.AuthorizationContext.HasFailed, Is.True);
+            Assert.That(result.HttpContext.Response.Body.Length, Is.Zero);
         });
     }
 
     [Test]
-    public async Task PropietarioExternoAusenteDeAudience_Responde401AunqueExistaEnScopes()
+    public async Task PropietarioExternoAusenteDeAudience_RechazaAunqueExistaEnScopes()
     {
         var result = await AuthorizeAsync(
             new SecureAuthAttribute("developer-system", "dev-account.2", "develop.write"),
@@ -106,24 +106,24 @@ public sealed class TokenAuthorizationHandlerTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(result.AuthorizationContext.HasSucceeded, Is.False);
-            Assert.That(result.HttpContext.Response.StatusCode, Is.EqualTo(StatusCodes.Status401Unauthorized));
+            Assert.That(result.AuthorizationContext.HasFailed, Is.True);
+            Assert.That(result.HttpContext.Response.Body.Length, Is.Zero);
         });
     }
 
     [Test]
-    public async Task AliasDesconocido_Responde403()
+    public async Task AliasDesconocido_RechazaAutorizacion()
     {
         var result = await AuthorizeAsync(
             new SecureAuthAttribute("unknown-system", "resource.1", "resource.read"),
             [ConsumerSystemId],
             new());
 
-        Assert.That(result.HttpContext.Response.StatusCode, Is.EqualTo(StatusCodes.Status403Forbidden));
+        Assert.That(result.AuthorizationContext.HasFailed, Is.True);
     }
 
     [Test]
-    public async Task FirmaInvalida_Responde401()
+    public async Task FirmaInvalida_RechazaAutenticacion()
     {
         using var otherRsa = RSA.Create(2048);
         var result = await AuthorizeAsync(
@@ -132,18 +132,18 @@ public sealed class TokenAuthorizationHandlerTests
             Scopes((ConsumerSystemId, "system", new[] { "systems.update" })),
             signingKey: otherRsa);
 
-        Assert.That(result.HttpContext.Response.StatusCode, Is.EqualTo(StatusCodes.Status401Unauthorized));
+        Assert.That(result.AuthorizationContext.HasFailed, Is.True);
     }
 
     [Test]
-    public async Task PermisoAusente_Responde403()
+    public async Task PermisoAusente_RechazaAutorizacion()
     {
         var result = await AuthorizeAsync(
             new SecureAuthAttribute("system", "systems.delete"),
             [ConsumerSystemId],
             Scopes((ConsumerSystemId, "system", new[] { "systems.read" })));
 
-        Assert.That(result.HttpContext.Response.StatusCode, Is.EqualTo(StatusCodes.Status403Forbidden));
+        Assert.That(result.AuthorizationContext.HasFailed, Is.True);
     }
 
     [TestCase("ABC-123")]
@@ -198,7 +198,7 @@ public sealed class TokenAuthorizationHandlerTests
     }
 
     [Test]
-    public async Task PropiedadAnidadaEnBody_NoSeResuelve()
+    public async Task PropiedadAnidadaEnBody_NoSeResuelveYRechazaAutorizacion()
     {
         var result = await AuthorizeAsync(
             new SecureAuthAttribute("developer-system", "dev-account.{accountId}", "develop.write"),
@@ -206,7 +206,7 @@ public sealed class TokenAuthorizationHandlerTests
             Scopes((DeveloperSystemId, "dev-account.2", new[] { "develop.write" })),
             configureRequest: context => SetJsonBody(context, """{"account":{"accountId":"2"}}"""));
 
-        Assert.That(result.HttpContext.Response.StatusCode, Is.EqualTo(StatusCodes.Status403Forbidden));
+        Assert.That(result.AuthorizationContext.HasFailed, Is.True);
     }
 
     [Test]
@@ -267,7 +267,7 @@ public sealed class TokenAuthorizationHandlerTests
     }
 
     [Test]
-    public async Task ScopeMalFormado_Responde403()
+    public async Task ScopeMalFormado_RechazaAutorizacion()
     {
         var result = await AuthorizeAsync(
             [new SecureAuthAttribute("system", "systems.read")],
@@ -275,7 +275,7 @@ public sealed class TokenAuthorizationHandlerTests
             scopes: null,
             rawScopeClaim: "{");
 
-        Assert.That(result.HttpContext.Response.StatusCode, Is.EqualTo(StatusCodes.Status403Forbidden));
+        Assert.That(result.AuthorizationContext.HasFailed, Is.True);
     }
 
     private Task<AuthorizationExecutionResult> AuthorizeAsync(
