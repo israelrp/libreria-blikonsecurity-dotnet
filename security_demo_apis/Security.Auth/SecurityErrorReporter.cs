@@ -12,6 +12,8 @@ namespace Security.Auth;
 
 internal sealed class SecurityErrorReporter : ISecurityErrorReporter
 {
+    private const int MaxErrorMessageLength = 300;
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
@@ -97,6 +99,8 @@ internal sealed class SecurityErrorReporter : ISecurityErrorReporter
 
         if (string.IsNullOrWhiteSpace(report.ErrorMessage))
             throw new ArgumentException("ErrorMessage es requerido.", nameof(report));
+
+        report.ErrorMessage = NormalizeText(report.ErrorMessage, MaxErrorMessageLength);
 
         if (string.IsNullOrWhiteSpace(report.Criticality))
             throw new ArgumentException("Criticality es requerido.", nameof(report));
