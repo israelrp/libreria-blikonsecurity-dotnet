@@ -1,5 +1,10 @@
 # Security.Auth
 
+## Documentación conceptual
+
+- [Security](../../docs/security.md): autenticación, autorización, integración y riesgos.
+- [Permissions](../../docs/permissions.md): scopes, permisos, roles, asignaciones y nomenclatura.
+
 Librería interna para APIs ASP.NET Core con:
 
 - validación de JWT Bearer mediante firma RSA, issuer, audience y vigencia;
