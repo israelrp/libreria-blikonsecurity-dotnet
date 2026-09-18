@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authorization.Policy;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 
 namespace Security.Auth;
@@ -16,6 +17,7 @@ public static class ServiceCollectionExtensions
         bool useAsDefault = true)
     {
         services.AddHttpContextAccessor();
+        services.TryAddScoped<ISecurityIdentity, SecurityIdentity>();
         services.AddHttpClient();
         services.AddSingleton<IValidateOptions<SecurityAuthOptions>, SecurityAuthOptionsValidator>();
         services.AddOptions<SecurityAuthOptions>()

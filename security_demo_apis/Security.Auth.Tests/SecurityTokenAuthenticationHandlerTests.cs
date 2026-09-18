@@ -65,6 +65,30 @@ public sealed class SecurityTokenAuthenticationHandlerTests
         Assert.That(result.Succeeded, Is.True);
     }
 
+    [TestCase("user")]
+    [TestCase("system")]
+    public async Task TokenFirmado_ExponeIdentidadDesdePrincipalValidado(string type)
+    {
+        var result = await AuthenticateAsync(CreateToken([SystemId], type: type));
+        Assert.That(result.Succeeded, Is.True);
+        var accessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext { User = result.Principal! }
+        };
+        try
+        {
+            ISecurityIdentity identity = new SecurityIdentity(accessor);
+            Assert.That(identity.IsAuthenticated, Is.True);
+            Assert.That(identity.Type, Is.EqualTo(type == "user" ? SecurityIdentityType.User : SecurityIdentityType.System));
+            Assert.That(identity.BlikonId, Is.EqualTo(type == "user" ? Guid.Parse(BlikonId) : (Guid?)null));
+            Assert.That(identity.SystemId, Is.EqualTo(type == "system" ? Guid.Parse(SystemId) : (Guid?)null));
+        }
+        finally
+        {
+            accessor.HttpContext = null;
+        }
+    }
+
     [Test]
     public async Task TokenConFirmaInvalida_FallaAutenticacion()
     {
@@ -109,7 +133,7 @@ public sealed class SecurityTokenAuthenticationHandlerTests
         return await handler.AuthenticateAsync();
     }
 
-    private string CreateToken(IReadOnlyCollection<string> audiences, RSA? signingKey = null)
+    private string CreateToken(IReadOnlyCollection<string> audiences, RSA? signingKey = null, string? type = null)
     {
         var descriptor = new SecurityTokenDescriptor
         {
@@ -125,6 +149,16 @@ public sealed class SecurityTokenAuthenticationHandlerTests
                 new RsaSecurityKey(signingKey ?? _rsa),
                 SecurityAlgorithms.RsaSha256)
         };
+
+        if (type is not null)
+        {
+            descriptor.Claims["typ"] = type;
+            if (type == "system")
+            {
+                descriptor.Claims.Remove("blikon_id");
+                descriptor.Claims["system_id"] = SystemId;
+            }
+        }
 
         foreach (var audience in audiences)
             descriptor.Audiences.Add(audience);

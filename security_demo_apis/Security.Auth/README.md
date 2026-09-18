@@ -93,6 +93,55 @@ var blikonId = User.FindFirst("blikon_id")?.Value;
 La autenticacion valida el token y construye la identidad. Posteriormente,
 `SecureAuth` evalua audiences, scopes y permisos sobre esa identidad validada.
 
+## Identidad en servicios con `ISecurityIdentity`
+
+`AddCustomTokenAuth` registra automáticamente `ISecurityIdentity` como Scoped
+(una instancia por petición), también con `useAsDefault: false`. Su uso es opcional:
+los consumidores existentes pueden seguir leyendo `HttpContext.User`.
+
+```csharp
+using Security.Auth;
+
+public sealed class MiServicio(ISecurityIdentity securityIdentity)
+{
+    public Guid ObtenerUsuarioAutenticado()
+    {
+        if (!securityIdentity.IsAuthenticated
+            || securityIdentity.Type != SecurityIdentityType.User
+            || securityIdentity.BlikonId is not Guid blikonId)
+        {
+            throw new UnauthorizedAccessException("Se requiere una identidad de usuario.");
+        }
+
+        return blikonId;
+    }
+}
+```
+
+La aplicación decide cómo convertir ese error a una respuesta HTTP. La interfaz
+no concede acceso ni sustituye `SecureAuth` o las verificaciones de propiedad.
+
+| Propiedad | Comportamiento |
+| --- | --- |
+| `IsAuthenticated` | Existe una única identidad autenticada del esquema `Bearer` de Security.Auth |
+| `Type` | `User` para `typ=user`, `System` para `typ=system`; de lo contrario `Unknown` |
+| `BlikonId` | GUID del claim `blikon_id`, únicamente para `User` |
+| `SystemId` | GUID del claim `system_id`, únicamente para `System` |
+
+Los identificadores ausentes, inválidos, duplicados o `Guid.Empty` devuelven
+`null`. Un `typ` ausente, desconocido o duplicado devuelve `Unknown`. La lectura
+no impone nuevas reglas de autenticación: un token ya aceptado puede tener
+`IsAuthenticated=true` y un identificador `null`; el servicio debe verificar los
+datos que requiere su operación.
+
+Solo se leen claims de una misma identidad autenticada de Security.Auth; no se
+mezclan con `LegacyBearer` u otros esquemas. Sin petición, sin autenticación o
+con varias identidades `Bearer` ambiguas, devuelve `false`, `Unknown` y `null`.
+Se consulta la identidad al acceder a cada propiedad, después de la autenticación;
+no se captura en el constructor ni se vuelve a validar o decodificar el token.
+No depende de bases de datos ni llamadas de red. No usar como identidad persistente
+en trabajos de segundo plano ni inyectarlo en servicios Singleton.
+
 ## Autorización con `SecureAuth`
 
 Los endpoints que requieran scopes y permisos de esta libreria deben usar
