@@ -39,6 +39,9 @@ ScaffoldingReadMe.txt
 # dotenv environment variables file
 .env
 
+# Local public key; deployed environments use Security__Auth__PublicKeyPem
+/security_demo_apis/DemoAPIWithSecurity/Auth/public_key.pem
+
 # Others
 ~$*
 *~

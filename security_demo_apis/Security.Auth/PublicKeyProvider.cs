@@ -10,8 +10,14 @@ public sealed class PublicKeyProvider
     {
         var options = authOptions.Value;
 
+        if (!string.IsNullOrWhiteSpace(options.PublicKeyPem))
+        {
+            PublicKeyPem = options.PublicKeyPem;
+            return;
+        }
+
         if (string.IsNullOrWhiteSpace(options.PublicKeyPath))
-            throw new InvalidOperationException("Security:Auth:PublicKeyPath no esta configurado.");
+            throw new InvalidOperationException("Configura Security:Auth:PublicKeyPem o Security:Auth:PublicKeyPath.");
 
         var fullPublicKeyPath = ResolvePublicKeyPath(options.PublicKeyPath);
         if (string.IsNullOrEmpty(fullPublicKeyPath))

@@ -82,7 +82,8 @@ El propietario proviene de la configuración; nunca de route, query o body.
 
 | Propiedad | Uso |
 | --- | --- |
-| `PublicKeyPath` | Llave pública para validar la firma RSA |
+| `PublicKeyPem` | Contenido PEM de la llave pública; tiene prioridad sobre el archivo |
+| `PublicKeyPath` | Ruta del archivo de llave pública cuando `PublicKeyPem` está vacío |
 | `SystemId` | Identificador de la API consumidora |
 | `ValidIssuer` | Emisor aceptado |
 | `ValidAudience` | Audience base requerida |
@@ -91,6 +92,30 @@ El propietario proviene de la configuración; nunca de route, query o body.
 
 Todos los valores deben pertenecer al mismo ambiente. No debe mezclarse
 configuración de Development, Testing y Production.
+
+### Llave pública en local y Azure
+
+En local, conserva `Auth/public_key.pem` y configura `PublicKeyPath` como en el
+ejemplo. La llave de la API demo está excluida de Git; cada desarrollador debe
+obtener el archivo correspondiente a su ambiente por separado. El proyecto
+copia el archivo local al directorio de salida cuando existe.
+
+En Azure App Service, agrega una configuración de aplicación con el nombre
+`Security__Auth__PublicKeyPem` y el contenido completo del PEM, incluidos los
+delimitadores `-----BEGIN PUBLIC KEY-----` y `-----END PUBLIC KEY-----` y los
+saltos de línea reales (no la secuencia literal `\n`). No necesitas desplegar
+el archivo. Usa configuración de ranura si la llave debe permanecer asociada
+al ambiente al intercambiar despliegues.
+
+La librería utiliza primero `PublicKeyPem` si tiene contenido; de lo contrario,
+lee `PublicKeyPath`. Un PEM configurado pero inválido no provoca un cambio
+automático al archivo: la validación de tokens falla. Si ambas opciones están
+vacías o el archivo requerido no existe, la carga del proveedor falla con un
+mensaje de configuración. Reinicia la aplicación después de cambiar la llave,
+porque el proveedor conserva su contenido en memoria.
+
+La llave pública no es un secreto, pero debe protegerse contra modificaciones
+no autorizadas. La llave privada que firma los tokens no pertenece a esta API.
 
 ## 4. Flujo completo
 

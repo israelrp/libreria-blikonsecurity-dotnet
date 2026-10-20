@@ -49,6 +49,10 @@ Una Web API creada con `Microsoft.NET.Sdk.Web` normalmente ya incluye el framewo
 
 Reglas de configuración:
 
+- `PublicKeyPem` acepta el contenido completo de la llave pública y tiene prioridad sobre `PublicKeyPath`. Si está vacío, se utiliza el archivo local.
+- En Azure App Service, configura `Security__Auth__PublicKeyPem` con el PEM y sus saltos de línea reales. No se necesita el archivo en el despliegue.
+- En local, conserva `Auth/public_key.pem` fuera de Git. Cada desarrollador debe obtener su propia copia; la ruta de la API demo está en `.gitignore`.
+- Reinicia la aplicación cuando cambies la llave. Un PEM inválido no provoca un cambio automático al archivo.
 - Los aliases de `ScopeOwners` usan kebab-case (palabras minúsculas separadas por guiones).
 - Cada valor de `ScopeOwners` debe ser un GUID diferente de `SystemId`.
 - `EnableSuperAdminBypass` permite omitir el permiso cuando `is_superadmin` es `true`, pero nunca omite la firma, issuer, vigencia ni audiences requeridos.
